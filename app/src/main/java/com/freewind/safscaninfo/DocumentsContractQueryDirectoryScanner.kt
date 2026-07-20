@@ -6,8 +6,9 @@ import android.net.Uri
 import android.provider.DocumentsContract
 
 /**
- * ContentResolver.query：projection 一次指定要的列 → 一趟 cursor 同时拿到 name+size。
- * 整树扫完计一次时；展示区各大步空行分隔，每类只显示前 5 条。
+ * ContentResolver.query：projection 一次指定要的列 → 一趟 cursor 同时拿到 name+size+mimeType。
+ * 仅当前目录一层（不递归；原因见 README / MainActivity.SCAN_SCOPE_NOTE）。
+ * mimeType 可直接判目录，无需像 DocumentFile 那样逐项 isDirectory()。
  */
 object DocumentsContractQueryDirectoryScanner {
 
@@ -26,6 +27,7 @@ object DocumentsContractQueryDirectoryScanner {
         onProgress: (String) -> Unit = {},
         onAppend: (String) -> Unit = {},
     ) {
+        ScanStepOutput.begin(onAppend, onProgress, "输出内存直取字段说明")
         onAppend(
             buildString {
                 appendLine("=== 内存可直接拿到的信息（ContentResolver.query）===")
@@ -38,37 +40,48 @@ object DocumentsContractQueryDirectoryScanner {
                 appendLine("因此 name+size 与列目录同属一次操作，不必再拆第二趟。")
             }.trimEnd(),
         )
-        onAppend("")
 
-        onProgress("DocumentsContract.getTreeDocumentId() …")
+        ScanStepOutput.begin(onAppend, onProgress, "DocumentsContract.getTreeDocumentId()")
         val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
 
-        onProgress("query 阶段：整树一次拿 name+size …")
+        ScanStepOutput.begin(
+            onAppend,
+            onProgress,
+            "query 阶段：一次 cursor 拿 name + size + mimeType",
+        )
         val queryStartedAt = System.nanoTime()
-        val files = mutableListOf<ListedFile>()
-        listAllFiles(
+        onProgress("query children → / …")
+        val children = listChildren(
             contentResolver = context.contentResolver,
             treeUri = treeUri,
             parentDocumentId = rootDocumentId,
-            directoryPath = "",
-            onFile = { files += it },
+            directory = "/",
             onProgress = onProgress,
         )
+        onProgress("query children → / → ${children.size} 项")
+        val items = children.map { child ->
+            ListedFile(
+                name = child.name,
+                size = child.size,
+                mimeType = child.mimeType,
+                uri = child.uri,
+            )
+        }
         val queryElapsedMs = elapsedMs(queryStartedAt)
 
-        if (files.isEmpty()) {
-            throw IllegalArgumentException("目录下未找到任何文件")
+        if (items.isEmpty()) {
+            throw IllegalArgumentException("当前目录下没有任何子项")
         }
 
-        onProgress("扫描完成：文件 ${files.size}，${queryElapsedMs} ms")
+        onProgress("扫描完成：子项 ${items.size}，${queryElapsedMs} ms")
         onAppend(
             buildString {
-                appendLine("=== query 阶段（一次拿到 name+size）===")
+                appendLine("=== query 阶段（一次拿到 name+size+mimeType，不过滤子目录）===")
                 appendLine("耗时: ${queryElapsedMs} ms")
-                appendLine("fileCount: ${files.size}")
+                appendLine("itemCount: ${items.size}")
                 appendLine("前 $DISPLAY_LIMIT 个:")
-                files.take(DISPLAY_LIMIT).forEachIndexed { index, file ->
-                    appendLine("  ${index + 1}. name=${file.name}  size=${file.size}  uri=${file.uri}")
+                items.take(DISPLAY_LIMIT).forEachIndexed { index, file ->
+                    appendLine("  ${index + 1}. name=${file.name}  size=${file.size}  mimeType=${file.mimeType}  uri=${file.uri}")
                 }
             }.trimEnd(),
         )
@@ -77,61 +90,15 @@ object DocumentsContractQueryDirectoryScanner {
     private data class ListedFile(
         val name: String,
         val size: Long,
+        val mimeType: String?,
         val uri: Uri,
     )
-
-    private fun listAllFiles(
-        contentResolver: ContentResolver,
-        treeUri: Uri,
-        parentDocumentId: String,
-        directoryPath: String,
-        onFile: (ListedFile) -> Unit,
-        onProgress: (String) -> Unit,
-    ) {
-        val directory = directoryPath.ifEmpty { "/" }
-        onProgress("query children → $directory …")
-        val children = listChildren(
-            contentResolver = contentResolver,
-            treeUri = treeUri,
-            parentDocumentId = parentDocumentId,
-            directory = directory,
-            onProgress = onProgress,
-        )
-        onProgress("query children → $directory → ${children.size} 项")
-
-        for (child in children) {
-            val childPath = if (directoryPath.isEmpty()) {
-                child.name
-            } else {
-                "$directoryPath/${child.name}"
-            }
-            if (child.isDirectory) {
-                onProgress("进入子目录 $childPath")
-                listAllFiles(
-                    contentResolver = contentResolver,
-                    treeUri = treeUri,
-                    parentDocumentId = child.documentId,
-                    directoryPath = childPath,
-                    onFile = onFile,
-                    onProgress = onProgress,
-                )
-                continue
-            }
-            onFile(
-                ListedFile(
-                    name = child.name,
-                    size = child.size,
-                    uri = child.uri,
-                ),
-            )
-        }
-    }
 
     private data class ListedChild(
         val documentId: String,
         val name: String,
         val size: Long,
-        val isDirectory: Boolean,
+        val mimeType: String?,
         val uri: Uri,
     )
 
@@ -162,14 +129,13 @@ object DocumentsContractQueryDirectoryScanner {
                 } else {
                     rows.getLong(sizeIndex)
                 }
-                val isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
                 val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
                 onProgress("list $directory [$index] $name")
                 children += ListedChild(
                     documentId = documentId,
                     name = name,
                     size = size,
-                    isDirectory = isDirectory,
+                    mimeType = mimeType,
                     uri = uri,
                 )
             }

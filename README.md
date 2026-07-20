@@ -1,16 +1,42 @@
 ## 简介
 
-这个 Demo 演示 **freewind-music-player 扫曲库时，SAF 目录扫描能拿到哪些文件信息**。
+这个 Demo 对比 SAF 目录扫描的两种常见写法：
 
-music-player 用的是 `DocumentsContract.buildChildDocumentsUriUsingTree` + `ContentResolver.query` 读 Cursor，阶段 1 只取 4 列：`documentId`、`displayName`、`mimeType`、`sizeBytes`，再拼出 `uri` 和 `isDirectory`，并自己算 `relativePath`。
+1. **`DocumentFile.listFiles()`** — list 阶段拿全部 DocumentFile，再逐个读 `name` / `length()`
+2. **`ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(...))`** — 一次 cursor 同时拿 name、size、mimeType 等
 
-本 Demo 在此基础上：
+界面分段计时，各大步空行分隔，每类只显示前 5 条；扫描中有 progress 提示当前步骤。
 
-1. 用同样方式递归扫指定目录下所有**文件**
-2. 额外读 Cursor 的 `lastModified`、`flags`、`summary`
-3. 对每个文件再调 `DocumentFile.fromSingleUri`，列出 `exists / canRead / canWrite / length / lastModified` 等
+## 为何只扫「当前目录一层」（不递归）
 
-界面会把每个文件的字段**一行行列出**，文件之间**空一行**，方便肉眼看。
+**这是刻意设计，不是能力缺失。**
+
+### DocumentFile 的瓶颈
+
+`DocumentFile.listFiles()` 内部对子项通常只 query `DOCUMENT_ID` 再拼成 `DocumentFile`，**内存里基本只有 `uri`**。
+
+要区分「文件 / 子目录」，必须再调 `isDirectory()`、`isFile()`、`name`、`type` 等——**每一项都会再打 ContentResolver / DocumentProvider**。
+
+目录项很多时，等于在 list 之后对**全量子项做二次访问**；若还要递归进子目录，每层都要重复「list + 逐项 isDirectory + 再递归」，会非常慢。
+
+### DocumentsContract query 的优势
+
+`ContentResolver.query` 可在 projection 里一次声明 `DISPLAY_NAME`、`SIZE`、`MIME_TYPE` 等列。
+
+cursor 每一行里已有 `mimeType`，用 `mimeType == DocumentsContract.Document.MIME_TYPE_DIR` 即可判目录，**无需对每个子项再发一次 provider 调用**。
+
+name、size、是否目录同属一趟 query，天然适合大目录。
+
+### 对本 Demo 的含义
+
+| 场景 | DocumentFile | query |
+|------|-------------|-------|
+| 仅当前层、不递归 | listFiles 只拿 URI，**不调 isDirectory** | 一趟 query 拿全部子项 |
+| **含子目录**且需递归整棵树 | list + 逐项 isDirectory + 递归，极慢 | 每层一趟 query，相对快很多 |
+
+**两者在「有子目录、需递归」时的性能差距会非常大。**
+
+本 Demo **不展示递归扫描**，也**不在 DocumentFile 路径调 isDirectory()**——只 list 当前层全部 URI；query 路径同样列出当前层全部子项（mimeType 随 cursor 一并返回，无额外 provider 调用）。
 
 ## 快速开始
 
@@ -37,74 +63,17 @@ cd android-kotlin-saf-document-scan-info-demo
 
 安装后：
 
-1. 点「选择目录」→ 选一个含音频/任意文件的文件夹并授权
-2. 点「开始扫描」→ 下方滚动查看每个文件的全部字段
+1. 点「选择目录」→ 选一个含文件的文件夹并授权
+2. 分别点两种扫描按钮 → 对比耗时与输出（仅当前层）
 
 ## 注意事项
 
 - 必须用 SAF 选目录，不能直接填 `/sdcard/...` 路径
-- 大目录扫描可能稍慢，属正常
-- music-player 阶段 2 还会用 `MediaMetadataRetriever` 读音频元数据（title/artist/duration），**不在本 Demo 范围**——本 Demo 只展示「列目录 / 读 DocumentFile」能拿到的信息
+- 当前层没有任何子项时，会报「当前目录下没有任何子项」
+- 大目录 list/query 本身仍可能较慢，progress 会显示当前步骤
 
-## 教程
+## 关键代码
 
-### 1. music-player 怎么扫
-
-曲库根目录是用户授权的 **tree URI**（`ACTION_OPEN_DOCUMENT_TREE`）。扫描时对每个子目录调用 `DocumentsContractApi.listChildren`：
-
-- `buildChildDocumentsUriUsingTree(treeUri, parentDocumentId)`
-- Cursor projection：`DOCUMENT_ID`, `DISPLAY_NAME`, `MIME_TYPE`, `SIZE`
-- 由 `mimeType == MIME_TYPE_DIR` 判断是否目录
-- `buildDocumentUriUsingTree` 得到每个条目的 `uri`
-- 递归进子目录，文件则生成 `AudioTrack` stub（含 `relativePath`, `sizeBytes`, `mimeType`, `trackUri` 等）
-
-### 2. 本 Demo 多展示了什么
-
-**Cursor 扩展列**（music-player 当前没查，但 provider 通常有）：
-
-- `lastModified`
-- `flags`（是否支持写/删/重命名等，Demo 会解码成可读标签）
-- `summary`
-
-**DocumentFile**（music-player 在别的流程里也会用，例如 `lastModified`、`exists`）：
-
-- `name`, `type`, `uri`
-- `exists`, `isDirectory`, `isFile`
-- `canRead`, `canWrite`
-- `length`, `lastModified`
-- `parentFile.uri`
-
-**扫描时自己拼的**（music-player 同样有）：
-
-- `relativePath` — 相对根目录的路径
-- `rootUri` — 用户选的 tree URI
-- `parentUri` — 直接父目录 document URI
-
-### 3. 输出示例（节选）
-
-```
-共扫描到 3 个文件
-music-player 扫描 Cursor 列: documentId, displayName, mimeType, sizeBytes
-
-文件名: song.mp3
-relativePath: Music/song.mp3
-rootUri: content://...
-parentUri: content://...
---- DocumentsContract Cursor（music-player 扫描用的 4 列 + 扩展列）---
-documentId: ...
-displayName: song.mp3
-mimeType: audio/mpeg
-sizeBytes: 5242880
-...
-
---- DocumentFile（单文件 API 额外可读字段）---
-DocumentFile.name: song.mp3
-DocumentFile.length: 5242880
-...
-```
-
-### 4. 关键代码
-
-- `DocumentFileDirectoryScanner.kt` — `DocumentFile.listFiles()` 扫描（独立）
-- `DocumentsContractQueryDirectoryScanner.kt` — `ContentResolver.query` 扫描（独立）
-- `MainActivity.kt` — 选目录、触发扫描、展示文本
+- `DocumentFileDirectoryScanner.kt` — DocumentFile 路径（仅当前层）
+- `DocumentsContractQueryDirectoryScanner.kt` — query 路径（仅当前层）
+- `MainActivity.kt` — 选目录、触发扫描、progress、结果展示

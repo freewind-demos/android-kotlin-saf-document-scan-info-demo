@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,7 +41,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Demo 入口：选 SAF 目录 → 两种扫描方式对比 */
+/** 为何 Demo 只扫当前目录一层；详 README「为何只扫当前目录一层」 */
+private const val SCAN_SCOPE_NOTE = """
+为何只扫当前目录一层（不递归）：
+
+DocumentFile.listFiles() 返回的子项，内存里基本只有 uri。要区分文件/目录，必须再调 isDirectory() 等——每一项都会再打 ContentResolver/DocumentProvider。大目录等于全量二次访问，极慢。
+
+ContentResolver.query 一次 cursor 即可拿到 displayName、size、mimeType；mimeType == MIME_TYPE_DIR 即可判目录，无需逐项再查。
+
+若递归进子目录，DocumentFile 会在「list + 每项 isDirectory + 递归」上累积，与 query 的性能差距会非常大。本 Demo 只 list/query 当前层全部子项，DocumentFile 路径不调 isDirectory()；含子目录若要递归整树，上述差异仍然存在。
+"""
+
+/** Demo 入口：选 SAF 目录 → 两种扫描方式对比（仅当前层，见 SCAN_SCOPE_NOTE） */
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,6 +75,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
     var resultText by remember { mutableStateOf("请先选择目录，再选一种扫描方式。") }
     var isScanning by remember { mutableStateOf(false) }
     var progressText by remember { mutableStateOf("") }
+    var scopeNoteExpanded by remember { mutableStateOf(false) }
 
     val openTreeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -78,7 +92,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             return@rememberLauncherForActivityResult
         }
         selectedTreeUri = uri
-        resultText = "已选目录：\n$uri\n\n点下方按钮：顶部先写该方法内存直取字段，再分段计时（list 只收 URI / query 一次 name+size），每类只显示前 5 条。"
+        resultText = "已选目录：\n$uri\n\n点下方按钮对比两种扫法（仅当前层）。"
     }
 
     fun runDocumentFileScan() {
@@ -159,9 +173,28 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             fontWeight = FontWeight.Bold,
         )
         Text(
-            text = "对比两种扫法耗时：DocumentFile 先 list URI 再取 name/size；query 一次拿全。信息区顶部写内存直取字段，各大步空行，每类只显示前 5 条。",
+            text = "对比 DocumentFile.listFiles 与 ContentResolver.query 在当前目录一层的耗时；每类只显示前 5 条。",
             style = MaterialTheme.typography.bodyMedium,
         )
+        TextButton(
+            onClick = { scopeNoteExpanded = !scopeNoteExpanded },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = if (scopeNoteExpanded) {
+                    "▲ 收起：为何只扫当前目录一层"
+                } else {
+                    "▼ 展开：为何只扫当前目录一层"
+                },
+            )
+        }
+        AnimatedVisibility(visible = scopeNoteExpanded) {
+            Text(
+                text = SCAN_SCOPE_NOTE.trim(),
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 18.sp,
+            )
+        }
         OutlinedButton(onClick = { openTreeLauncher.launch(null) }) {
             Text("选择目录")
         }
