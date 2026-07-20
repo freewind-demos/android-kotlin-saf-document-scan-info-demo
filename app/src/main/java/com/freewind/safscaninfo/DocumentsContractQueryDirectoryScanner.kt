@@ -21,7 +21,7 @@ object DocumentsContractQueryDirectoryScanner {
     fun inspect(
         context: Context,
         treeUri: Uri,
-        onProgress: ScanProgressCallback = {},
+        onProgress: (String) -> Unit = {},
     ): String {
         onProgress("DocumentsContract.getTreeDocumentId() …")
         val listSections = mutableListOf<String>()
@@ -69,7 +69,7 @@ object DocumentsContractQueryDirectoryScanner {
         parentDocumentId: String,
         directoryPath: String,
         listSections: MutableList<String>,
-        onProgress: ScanProgressCallback,
+        onProgress: (String) -> Unit,
     ): FirstFile? {
         val directory = directoryPath.ifEmpty { "/" }
         onProgress("ContentResolver.query(buildChildDocumentsUriUsingTree) → $directory …")
@@ -220,5 +220,47 @@ object DocumentsContractQueryDirectoryScanner {
     private fun readStringColumn(rows: Cursor, index: Int): String? {
         if (index < 0 || rows.isNull(index)) return null
         return rows.getString(index)
+    }
+
+    private fun formatInspectReport(
+        title: String,
+        firstFilePath: String,
+        firstFileUri: String,
+        listSections: List<String>,
+        accessFields: List<Pair<String, Any?>>,
+    ): String = buildString {
+        appendLine(title)
+        appendLine()
+        appendLine("firstFilePath: $firstFilePath")
+        appendLine("firstFileUri: $firstFileUri")
+        appendLine()
+        appendLine("=== list ===")
+        listSections.forEach { section ->
+            appendLine()
+            append(section)
+        }
+        appendLine()
+        appendLine("=== access (first file only) ===")
+        appendLine()
+        accessFields.forEach { (key, value) ->
+            appendLine("$key: $value")
+        }
+    }
+
+    private fun formatListSection(
+        listApi: String,
+        listApiResult: Int,
+        directory: String,
+        items: List<List<Pair<String, Any?>>>,
+    ): String = buildString {
+        appendLine("$listApi: $listApiResult")
+        appendLine("directory: $directory")
+        items.forEachIndexed { index, item ->
+            appendLine()
+            appendLine("[item $index]")
+            item.forEach { (key, value) ->
+                appendLine("$key: $value")
+            }
+        }
     }
 }

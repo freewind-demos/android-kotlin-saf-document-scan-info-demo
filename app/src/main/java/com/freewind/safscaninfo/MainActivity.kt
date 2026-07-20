@@ -81,13 +81,10 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
         resultText = "已选目录：\n$uri\n\n可选两种 API：先看 list 返回，再看第一个文件逐 API access。"
     }
 
-    fun startScan(method: ScanMethod) {
+    fun runDocumentFileScan() {
         val treeUri = selectedTreeUri ?: return
         isScanning = true
-        progressText = when (method) {
-            ScanMethod.DOCUMENT_FILE -> "准备 DocumentFile 扫描…"
-            ScanMethod.DOCUMENTS_CONTRACT_QUERY -> "准备 ContentResolver.query 扫描…"
-        }
+        progressText = "准备 DocumentFile 扫描…"
         scope.launch {
             val onProgress: (String) -> Unit = { message ->
                 scope.launch(Dispatchers.Main.immediate) {
@@ -96,20 +93,37 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             }
             resultText = try {
                 withContext(Dispatchers.IO) {
-                    when (method) {
-                        ScanMethod.DOCUMENT_FILE ->
-                            DocumentFileDirectoryScanner.inspect(
-                                context = activity,
-                                treeUri = treeUri,
-                                onProgress = onProgress,
-                            )
-                        ScanMethod.DOCUMENTS_CONTRACT_QUERY ->
-                            DocumentsContractQueryDirectoryScanner.inspect(
-                                context = activity,
-                                treeUri = treeUri,
-                                onProgress = onProgress,
-                            )
-                    }
+                    DocumentFileDirectoryScanner.inspect(
+                        context = activity,
+                        treeUri = treeUri,
+                        onProgress = onProgress,
+                    )
+                }
+            } catch (error: Exception) {
+                progressText = "扫描失败"
+                "扫描失败：${error.message ?: error.javaClass.simpleName}"
+            }
+            isScanning = false
+        }
+    }
+
+    fun runDocumentsContractQueryScan() {
+        val treeUri = selectedTreeUri ?: return
+        isScanning = true
+        progressText = "准备 ContentResolver.query 扫描…"
+        scope.launch {
+            val onProgress: (String) -> Unit = { message ->
+                scope.launch(Dispatchers.Main.immediate) {
+                    progressText = message
+                }
+            }
+            resultText = try {
+                withContext(Dispatchers.IO) {
+                    DocumentsContractQueryDirectoryScanner.inspect(
+                        context = activity,
+                        treeUri = treeUri,
+                        onProgress = onProgress,
+                    )
                 }
             } catch (error: Exception) {
                 progressText = "扫描失败"
@@ -140,14 +154,14 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
         Button(
             modifier = Modifier.fillMaxWidth(),
             enabled = selectedTreeUri != null && !isScanning,
-            onClick = { startScan(ScanMethod.DOCUMENT_FILE) },
+            onClick = { runDocumentFileScan() },
         ) {
             Text("DocumentFile.listFiles()")
         }
         Button(
             modifier = Modifier.fillMaxWidth(),
             enabled = selectedTreeUri != null && !isScanning,
-            onClick = { startScan(ScanMethod.DOCUMENTS_CONTRACT_QUERY) },
+            onClick = { runDocumentsContractQueryScan() },
         ) {
             Text("ContentResolver.query()")
         }

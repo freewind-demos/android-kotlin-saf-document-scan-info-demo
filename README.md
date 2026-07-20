@@ -105,7 +105,6 @@ DocumentFile.length: 5242880
 
 ### 4. 关键代码
 
-- `DocumentFileDirectoryScanner.kt` — `DocumentFile.listFiles()` 扫描
-- `DocumentsContractQueryDirectoryScanner.kt` — `ContentResolver.query` 扫描
-- `ScanTypes.kt` / `ScanReportFormat.kt` — 共用类型与报告格式
+- `DocumentFileDirectoryScanner.kt` — `DocumentFile.listFiles()` 扫描（独立）
+- `DocumentsContractQueryDirectoryScanner.kt` — `ContentResolver.query` 扫描（独立）
 - `MainActivity.kt` — 选目录、触发扫描、展示文本

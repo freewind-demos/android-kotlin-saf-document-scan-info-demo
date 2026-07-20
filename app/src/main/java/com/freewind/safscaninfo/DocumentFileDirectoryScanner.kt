@@ -9,7 +9,7 @@ object DocumentFileDirectoryScanner {
     fun inspect(
         context: Context,
         treeUri: Uri,
-        onProgress: ScanProgressCallback = {},
+        onProgress: (String) -> Unit = {},
     ): String {
         onProgress("DocumentFile.fromTreeUri() …")
         val root = DocumentFile.fromTreeUri(context, treeUri)
@@ -42,7 +42,7 @@ object DocumentFileDirectoryScanner {
         dir: DocumentFile,
         directoryPath: String,
         listSections: MutableList<String>,
-        onProgress: ScanProgressCallback,
+        onProgress: (String) -> Unit,
     ): FirstFile? {
         val directory = directoryPath.ifEmpty { "/" }
         onProgress("DocumentFile.listFiles() → $directory …")
@@ -111,5 +111,47 @@ object DocumentFileDirectoryScanner {
             "lastModified()" to file.lastModified(),
             "parentFile" to file.parentFile?.uri?.toString(),
         )
+    }
+
+    private fun formatInspectReport(
+        title: String,
+        firstFilePath: String,
+        firstFileUri: String,
+        listSections: List<String>,
+        accessFields: List<Pair<String, Any?>>,
+    ): String = buildString {
+        appendLine(title)
+        appendLine()
+        appendLine("firstFilePath: $firstFilePath")
+        appendLine("firstFileUri: $firstFileUri")
+        appendLine()
+        appendLine("=== list ===")
+        listSections.forEach { section ->
+            appendLine()
+            append(section)
+        }
+        appendLine()
+        appendLine("=== access (first file only) ===")
+        appendLine()
+        accessFields.forEach { (key, value) ->
+            appendLine("$key: $value")
+        }
+    }
+
+    private fun formatListSection(
+        listApi: String,
+        listApiResult: Int,
+        directory: String,
+        items: List<List<Pair<String, Any?>>>,
+    ): String = buildString {
+        appendLine("$listApi: $listApiResult")
+        appendLine("directory: $directory")
+        items.forEachIndexed { index, item ->
+            appendLine()
+            appendLine("[item $index]")
+            item.forEach { (key, value) ->
+                appendLine("$key: $value")
+            }
+        }
     }
 }
