@@ -17,20 +17,19 @@ object DocumentFileDirectoryScanner {
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?: throw IllegalArgumentException("DocumentFile.fromTreeUri() 无法打开目录")
         val listSections = mutableListOf<String>()
-        val files = mutableListOf<FoundFile>()
-        collectFiles(
+        val accessCandidates = mutableListOf<FoundFile>()
+        listAllDirectories(
             dir = root,
             directoryPath = "",
             listSections = listSections,
-            found = files,
-            limit = ACCESS_FILE_LIMIT,
+            accessCandidates = accessCandidates,
             onProgress = onProgress,
         )
-        if (files.isEmpty()) {
+        if (accessCandidates.isEmpty()) {
             throw IllegalArgumentException("目录下未找到任何文件")
         }
-        val accessSections = files.mapIndexed { index, foundFile ->
-            onProgress("读取文件 access (${index + 1}/${files.size})：${foundFile.path}")
+        val accessSections = accessCandidates.mapIndexed { index, foundFile ->
+            onProgress("读取文件 access (${index + 1}/${accessCandidates.size})：${foundFile.path}")
             AccessSection(
                 path = foundFile.path,
                 uri = foundFile.file.uri.toString(),
@@ -39,7 +38,7 @@ object DocumentFileDirectoryScanner {
         }
         onProgress("扫描完成")
         return formatInspectReport(
-            title = "DocumentFile.listFiles() + first-$ACCESS_FILE_LIMIT-files access",
+            title = "DocumentFile.listFiles() (full tree) + first-$ACCESS_FILE_LIMIT-files access",
             listSections = listSections,
             accessSections = accessSections,
         )
@@ -56,15 +55,14 @@ object DocumentFileDirectoryScanner {
         val fields: List<Pair<String, Any?>>,
     )
 
-    private fun collectFiles(
+    /** 整棵树 list；顺带记下前 ACCESS_FILE_LIMIT 个文件供后续单独 access */
+    private fun listAllDirectories(
         dir: DocumentFile,
         directoryPath: String,
         listSections: MutableList<String>,
-        found: MutableList<FoundFile>,
-        limit: Int,
+        accessCandidates: MutableList<FoundFile>,
         onProgress: (String) -> Unit,
     ) {
-        if (found.size >= limit) return
         val directory = directoryPath.ifEmpty { "/" }
         onProgress("DocumentFile.listFiles() → $directory …")
         val children = dir.listFiles()
@@ -77,23 +75,23 @@ object DocumentFileDirectoryScanner {
         )
         val sortedChildren = children.sortedBy { it.name?.lowercase().orEmpty() }
         for (child in sortedChildren) {
-            if (found.size >= limit) return
             val name = child.name ?: continue
             val childPath = if (directoryPath.isEmpty()) name else "$directoryPath/$name"
             if (child.isDirectory) {
                 onProgress("进入子目录 $childPath")
-                collectFiles(
+                listAllDirectories(
                     dir = child,
                     directoryPath = childPath,
                     listSections = listSections,
-                    found = found,
-                    limit = limit,
+                    accessCandidates = accessCandidates,
                     onProgress = onProgress,
                 )
                 continue
             }
-            onProgress("找到文件 (${found.size + 1}/$limit)：$childPath")
-            found += FoundFile(path = childPath, file = child)
+            if (accessCandidates.size < ACCESS_FILE_LIMIT) {
+                onProgress("记录 access 候选 (${accessCandidates.size + 1}/$ACCESS_FILE_LIMIT)：$childPath")
+                accessCandidates += FoundFile(path = childPath, file = child)
+            }
         }
     }
 

@@ -78,7 +78,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             return@rememberLauncherForActivityResult
         }
         selectedTreeUri = uri
-        resultText = "已选目录：\n$uri\n\n可选两种 API：先看 list 返回，再看前 5 个文件逐 API access。"
+        resultText = "已选目录：\n$uri\n\n可选两种 API：list 扫完整棵树，再对前 5 个文件单独 access。"
     }
 
     fun runDocumentFileScan() {
@@ -145,7 +145,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             fontWeight = FontWeight.Bold,
         )
         Text(
-            text = "展示 list 阶段返回值，以及前 5 个文件逐个 API access 的 key-value。",
+            text = "list 扫完整棵树；再对前 5 个文件逐个 API access 的 key-value。",
             style = MaterialTheme.typography.bodyMedium,
         )
         OutlinedButton(onClick = { openTreeLauncher.launch(null) }) {
