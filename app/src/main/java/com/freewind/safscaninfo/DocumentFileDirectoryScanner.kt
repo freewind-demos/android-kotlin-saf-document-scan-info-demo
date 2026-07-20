@@ -16,6 +16,7 @@ object DocumentFileDirectoryScanner {
         onProgress("DocumentFile.fromTreeUri() …")
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?: throw IllegalArgumentException("DocumentFile.fromTreeUri() 无法打开目录")
+        onProgress("DocumentFile.fromTreeUri() → ok")
         val listSections = mutableListOf<String>()
         val accessCandidates = mutableListOf<FoundFile>()
         listAllDirectories(
@@ -29,11 +30,11 @@ object DocumentFileDirectoryScanner {
             throw IllegalArgumentException("目录下未找到任何文件")
         }
         val accessSections = accessCandidates.mapIndexed { index, foundFile ->
-            onProgress("读取文件 access (${index + 1}/${accessCandidates.size})：${foundFile.path}")
+            onProgress("access (${index + 1}/${accessCandidates.size}) ${foundFile.path} …")
             AccessSection(
                 path = foundFile.path,
                 uri = foundFile.file.uri.toString(),
-                fields = readAccessFields(context, foundFile.file),
+                fields = readAccessFields(context, foundFile.file, onProgress),
             )
         }
         onProgress("扫描完成")
@@ -64,14 +65,23 @@ object DocumentFileDirectoryScanner {
         onProgress: (String) -> Unit,
     ) {
         val directory = directoryPath.ifEmpty { "/" }
-        onProgress("DocumentFile.listFiles() → $directory …")
+        onProgress("listFiles() → $directory …")
         val children = dir.listFiles()
-        onProgress("DocumentFile.listFiles() → $directory → ${children.size} 项")
+        onProgress("listFiles() → $directory → ${children.size} 项，开始逐项读属性")
+        val items = children.mapIndexed { index, child ->
+            readListItem(
+                file = child,
+                directory = directory,
+                index = index,
+                total = children.size,
+                onProgress = onProgress,
+            )
+        }
         listSections += formatListSection(
             listApi = "DocumentFile.listFiles()",
             listApiResult = children.size,
-            directory = directoryPath.ifEmpty { "/" },
-            items = children.map { readListItem(it) },
+            directory = directory,
+            items = items,
         )
         val sortedChildren = children.sortedBy { it.name?.lowercase().orEmpty() }
         for (child in sortedChildren) {
@@ -89,48 +99,67 @@ object DocumentFileDirectoryScanner {
                 continue
             }
             if (accessCandidates.size < ACCESS_FILE_LIMIT) {
-                onProgress("记录 access 候选 (${accessCandidates.size + 1}/$ACCESS_FILE_LIMIT)：$childPath")
+                onProgress("access 候选 (${accessCandidates.size + 1}/$ACCESS_FILE_LIMIT)：$childPath")
                 accessCandidates += FoundFile(path = childPath, file = child)
             }
         }
     }
 
-    /** listFiles() 返回元素：属性原名；方法用 method() 作 key */
-    private fun readListItem(file: DocumentFile): List<Pair<String, Any?>> = listOf(
-        "name" to file.name,
-        "type" to file.type,
-        "uri" to file.uri.toString(),
-        "isDirectory" to file.isDirectory,
-        "isFile" to file.isFile,
-        "exists()" to file.exists(),
-        "canRead()" to file.canRead(),
-        "canWrite()" to file.canWrite(),
-        "length()" to file.length(),
-        "lastModified()" to file.lastModified(),
-        "parentFile" to file.parentFile?.uri?.toString(),
-    )
+    /** listFiles() 返回元素：每个属性单独读并 onProgress */
+    private fun readListItem(
+        file: DocumentFile,
+        directory: String,
+        index: Int,
+        total: Int,
+        onProgress: (String) -> Unit,
+    ): List<Pair<String, Any?>> {
+        val prefix = "list $directory [${index + 1}/$total]"
+        fun field(key: String, value: Any?): Pair<String, Any?> {
+            onProgress("$prefix $key=$value")
+            return key to value
+        }
+        return listOf(
+            field("name", file.name),
+            field("type", file.type),
+            field("uri", file.uri.toString()),
+            field("isDirectory", file.isDirectory),
+            field("isFile", file.isFile),
+            field("exists()", file.exists()),
+            field("canRead()", file.canRead()),
+            field("canWrite()", file.canWrite()),
+            field("length()", file.length()),
+            field("lastModified()", file.lastModified()),
+            field("parentFile", file.parentFile?.uri?.toString()),
+        )
+    }
 
-    /** access 文件：方法名() 或 API 全名作 key，返回值作 value */
+    /** access 文件：每个属性单独读并 onProgress */
     private fun readAccessFields(
         context: Context,
         listedFile: DocumentFile,
+        onProgress: (String) -> Unit,
     ): List<Pair<String, Any?>> {
         val uri = listedFile.uri
+        onProgress("access DocumentFile.fromSingleUri($uri) …")
         val file = DocumentFile.fromSingleUri(context, uri)
             ?: throw IllegalArgumentException("DocumentFile.fromSingleUri() 无法打开文件")
+        fun field(key: String, value: Any?): Pair<String, Any?> {
+            onProgress("access $key=$value")
+            return key to value
+        }
         return listOf(
-            "DocumentFile.fromSingleUri(context, uri)" to file.javaClass.simpleName,
-            "name" to file.name,
-            "type" to file.type,
-            "uri" to file.uri.toString(),
-            "isDirectory" to file.isDirectory,
-            "isFile" to file.isFile,
-            "exists()" to file.exists(),
-            "canRead()" to file.canRead(),
-            "canWrite()" to file.canWrite(),
-            "length()" to file.length(),
-            "lastModified()" to file.lastModified(),
-            "parentFile" to file.parentFile?.uri?.toString(),
+            field("DocumentFile.fromSingleUri(context, uri)", file.javaClass.simpleName),
+            field("name", file.name),
+            field("type", file.type),
+            field("uri", file.uri.toString()),
+            field("isDirectory", file.isDirectory),
+            field("isFile", file.isFile),
+            field("exists()", file.exists()),
+            field("canRead()", file.canRead()),
+            field("canWrite()", file.canWrite()),
+            field("length()", file.length()),
+            field("lastModified()", file.lastModified()),
+            field("parentFile", file.parentFile?.uri?.toString()),
         )
     }
 
