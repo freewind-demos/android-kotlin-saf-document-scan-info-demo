@@ -2,26 +2,22 @@ package com.freewind.safscaninfo
 
 import android.content.ContentResolver
 import android.content.Context
-import android.database.Cursor
 import android.net.Uri
 import android.provider.DocumentsContract
 
 /**
- * ContentResolver.query + cursor：可 moveToNext 逐行拿 → list 阶段每拿到一项只报名字。
- * 扫完整棵树后输出摘要 + 前 5 个文件的 cursor 列；再单独 query 这 5 个并 append 详情。
+ * ContentResolver.query：projection 一次指定要的列 → 一趟 cursor 同时拿到 name+size。
+ * 整树扫完计一次时；展示区各大步空行分隔，每类只显示前 5 条。
  */
 object DocumentsContractQueryDirectoryScanner {
 
-    private const val ACCESS_FILE_LIMIT = 5
+    private const val DISPLAY_LIMIT = 5
 
     private val documentProjection = arrayOf(
         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
         DocumentsContract.Document.COLUMN_DISPLAY_NAME,
         DocumentsContract.Document.COLUMN_MIME_TYPE,
         DocumentsContract.Document.COLUMN_SIZE,
-        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-        DocumentsContract.Document.COLUMN_FLAGS,
-        DocumentsContract.Document.COLUMN_SUMMARY,
     )
 
     fun inspect(
@@ -30,107 +26,69 @@ object DocumentsContractQueryDirectoryScanner {
         onProgress: (String) -> Unit = {},
         onAppend: (String) -> Unit = {},
     ) {
+        onAppend(
+            buildString {
+                appendLine("=== 内存可直接拿到的信息（ContentResolver.query）===")
+                appendLine("query 必须在 projection 里声明要查的列；一次 query 后 cursor 行内已有：")
+                appendLine("- documentId")
+                appendLine("- displayName（name）")
+                appendLine("- mimeType（可判断 isDirectory）")
+                appendLine("- size")
+                appendLine("- uri（由 documentId + treeUri 在内存里拼出，不再打 provider）")
+                appendLine("因此 name+size 与列目录同属一次操作，不必再拆第二趟。")
+            }.trimEnd(),
+        )
+        onAppend("")
+
         onProgress("DocumentsContract.getTreeDocumentId() …")
         val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
 
-        var directoryCount = 0
-        var fileCount = 0
-        val firstFiles = mutableListOf<FoundFile>()
-
-        listAllDirectories(
+        onProgress("query 阶段：整树一次拿 name+size …")
+        val queryStartedAt = System.nanoTime()
+        val files = mutableListOf<ListedFile>()
+        listAllFiles(
             contentResolver = context.contentResolver,
             treeUri = treeUri,
             parentDocumentId = rootDocumentId,
             directoryPath = "",
-            directoryCount = { directoryCount += 1 },
-            onFile = { path, child ->
-                fileCount += 1
-                if (firstFiles.size < ACCESS_FILE_LIMIT) {
-                    firstFiles += FoundFile(
-                        path = path,
-                        child = child,
-                        listFields = snapshotListFields(child),
-                    )
-                }
-            },
+            onFile = { files += it },
             onProgress = onProgress,
         )
+        val queryElapsedMs = elapsedMs(queryStartedAt)
 
-        if (fileCount == 0) {
+        if (files.isEmpty()) {
             throw IllegalArgumentException("目录下未找到任何文件")
         }
 
-        onProgress("list 完成：子目录 $directoryCount，文件 $fileCount")
+        onProgress("扫描完成：文件 ${files.size}，${queryElapsedMs} ms")
         onAppend(
             buildString {
-                appendLine("=== list (ContentResolver.query cursor，整树) ===")
-                appendLine("listApi: ContentResolver.query(buildChildDocumentsUriUsingTree) — cursor 逐行 moveToNext")
-                appendLine("directoryCount: $directoryCount")
-                appendLine("fileCount: $fileCount")
-                appendLine()
-                appendLine("=== first $ACCESS_FILE_LIMIT files from list cursor ===")
-                firstFiles.forEachIndexed { index, found ->
-                    appendLine()
-                    appendLine("--- list file ${index + 1} ---")
-                    appendLine("path: ${found.path}")
-                    found.listFields.forEach { (key, value) ->
-                        appendLine("$key: $value")
-                    }
+                appendLine("=== query 阶段（一次拿到 name+size）===")
+                appendLine("耗时: ${queryElapsedMs} ms")
+                appendLine("fileCount: ${files.size}")
+                appendLine("前 $DISPLAY_LIMIT 个:")
+                files.take(DISPLAY_LIMIT).forEachIndexed { index, file ->
+                    appendLine("  ${index + 1}. name=${file.name}  size=${file.size}  uri=${file.uri}")
                 }
             }.trimEnd(),
         )
-
-        onAppend("")
-        onAppend("=== access (query document uri，仅前 ${firstFiles.size} 个) ===")
-        firstFiles.forEachIndexed { index, found ->
-            onProgress("access (${index + 1}/${firstFiles.size}) ${found.path} …")
-            val accessFields = readAccessFields(context.contentResolver, found.child.uri, onProgress)
-            onAppend(
-                buildString {
-                    appendLine()
-                    appendLine("--- access file ${index + 1} ---")
-                    appendLine("path: ${found.path}")
-                    appendLine("uri: ${found.child.uri}")
-                    accessFields.forEach { (key, value) ->
-                        appendLine("$key: $value")
-                    }
-                }.trimEnd(),
-            )
-        }
-        onProgress("扫描完成")
     }
 
-    private data class FoundFile(
-        val path: String,
-        val child: ListedChild,
-        val listFields: List<Pair<String, Any?>>,
-    )
-
-    private data class ListedChild(
-        val documentId: String,
-        val displayName: String,
-        val mimeType: String?,
+    private data class ListedFile(
+        val name: String,
         val size: Long,
-        val isDirectory: Boolean,
-        val lastModified: Long?,
-        val flags: Int?,
-        val summary: String?,
         val uri: Uri,
     )
 
-    private fun listAllDirectories(
+    private fun listAllFiles(
         contentResolver: ContentResolver,
         treeUri: Uri,
         parentDocumentId: String,
         directoryPath: String,
-        directoryCount: () -> Unit,
-        onFile: (path: String, child: ListedChild) -> Unit,
+        onFile: (ListedFile) -> Unit,
         onProgress: (String) -> Unit,
     ) {
         val directory = directoryPath.ifEmpty { "/" }
-        if (directoryPath.isNotEmpty()) {
-            directoryCount()
-        }
         onProgress("query children → $directory …")
         val children = listChildren(
             contentResolver = contentResolver,
@@ -141,89 +99,41 @@ object DocumentsContractQueryDirectoryScanner {
         )
         onProgress("query children → $directory → ${children.size} 项")
 
-        val sortedChildren = children.sortedBy { it.displayName.lowercase() }
-        for (child in sortedChildren) {
+        for (child in children) {
             val childPath = if (directoryPath.isEmpty()) {
-                child.displayName
+                child.name
             } else {
-                "$directoryPath/${child.displayName}"
+                "$directoryPath/${child.name}"
             }
             if (child.isDirectory) {
                 onProgress("进入子目录 $childPath")
-                listAllDirectories(
+                listAllFiles(
                     contentResolver = contentResolver,
                     treeUri = treeUri,
                     parentDocumentId = child.documentId,
                     directoryPath = childPath,
-                    directoryCount = directoryCount,
                     onFile = onFile,
                     onProgress = onProgress,
                 )
                 continue
             }
-            onFile(childPath, child)
+            onFile(
+                ListedFile(
+                    name = child.name,
+                    size = child.size,
+                    uri = child.uri,
+                ),
+            )
         }
     }
 
-    private fun snapshotListFields(child: ListedChild): List<Pair<String, Any?>> = listOf(
-        DocumentsContract.Document.COLUMN_DOCUMENT_ID to child.documentId,
-        DocumentsContract.Document.COLUMN_DISPLAY_NAME to child.displayName,
-        DocumentsContract.Document.COLUMN_MIME_TYPE to child.mimeType,
-        DocumentsContract.Document.COLUMN_SIZE to child.size,
-        DocumentsContract.Document.COLUMN_LAST_MODIFIED to child.lastModified,
-        DocumentsContract.Document.COLUMN_FLAGS to child.flags,
-        DocumentsContract.Document.COLUMN_SUMMARY to child.summary,
-        "DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)" to child.uri.toString(),
+    private data class ListedChild(
+        val documentId: String,
+        val name: String,
+        val size: Long,
+        val isDirectory: Boolean,
+        val uri: Uri,
     )
-
-    private fun readAccessFields(
-        contentResolver: ContentResolver,
-        fileUri: Uri,
-        onProgress: (String) -> Unit,
-    ): List<Pair<String, Any?>> {
-        val fields = mutableListOf<Pair<String, Any?>>()
-        onProgress("access getDocumentId($fileUri) …")
-        val documentId = DocumentsContract.getDocumentId(fileUri)
-        onProgress("access getDocumentId=$documentId")
-        fields += "DocumentsContract.getDocumentId(uri)" to documentId
-        fields += queryDocumentAccessFields(contentResolver, fileUri, onProgress)
-        return fields
-    }
-
-    private fun queryDocumentAccessFields(
-        contentResolver: ContentResolver,
-        documentUri: Uri,
-        onProgress: (String) -> Unit,
-    ): List<Pair<String, Any?>> {
-        val queryApi =
-            "ContentResolver.query(uri, DocumentsContract.Document.COLUMN_*, null, null, null)"
-        val fields = mutableListOf<Pair<String, Any?>>()
-        onProgress("access query($documentUri) …")
-        contentResolver.query(documentUri, documentProjection, null, null, null)?.use { rows ->
-            onProgress("access query.getCount()=${rows.count}")
-            fields += "$queryApi.getCount()" to rows.count
-            if (!rows.moveToFirst()) {
-                return fields
-            }
-            documentProjection.forEach { column ->
-                val index = rows.getColumnIndex(column)
-                val value: Any? = when {
-                    index < 0 -> null
-                    rows.isNull(index) -> null
-                    column == DocumentsContract.Document.COLUMN_SIZE ||
-                        column == DocumentsContract.Document.COLUMN_LAST_MODIFIED -> rows.getLong(index)
-                    column == DocumentsContract.Document.COLUMN_FLAGS -> rows.getInt(index)
-                    else -> rows.getString(index)
-                }
-                onProgress("access $column=$value")
-                fields += column to value
-            }
-        } ?: run {
-            onProgress("access query → null cursor")
-            fields += "$queryApi.getCount()" to null
-        }
-        return fields
-    }
 
     private fun listChildren(
         contentResolver: ContentResolver,
@@ -239,53 +149,34 @@ object DocumentsContractQueryDirectoryScanner {
             val nameIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
             val mimeIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
             val sizeIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
-            val modifiedIndex = rows.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-            val flagsIndex = rows.getColumnIndex(DocumentsContract.Document.COLUMN_FLAGS)
-            val summaryIndex = rows.getColumnIndex(DocumentsContract.Document.COLUMN_SUMMARY)
             var index = 0
             while (rows.moveToNext()) {
                 index += 1
-                val documentId = rows.getString(idIndex).orEmpty()
-                val displayName = rows.getString(nameIndex).orEmpty()
+                val documentId = rows.getString(idIndex)
+                    ?: throw IllegalStateException("DOCUMENT_ID 为 null ($directory #$index)")
+                val name = rows.getString(nameIndex)
+                    ?: throw IllegalStateException("DISPLAY_NAME 为 null ($directory #$index)")
                 val mimeType = rows.getString(mimeIndex)
-                val size = if (rows.isNull(sizeIndex)) 0L else rows.getLong(sizeIndex)
-                val lastModified = readLongColumn(rows, modifiedIndex)
-                val flags = readIntColumn(rows, flagsIndex)
-                val summary = readStringColumn(rows, summaryIndex)
+                val size = if (rows.isNull(sizeIndex)) {
+                    0L
+                } else {
+                    rows.getLong(sizeIndex)
+                }
                 val isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
                 val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
-                // 可逐行拿：progress 只报当前项名字，不刷详细字段
-                onProgress("list $directory [$index] $displayName")
+                onProgress("list $directory [$index] $name")
                 children += ListedChild(
                     documentId = documentId,
-                    displayName = displayName,
-                    mimeType = mimeType,
+                    name = name,
                     size = size,
                     isDirectory = isDirectory,
-                    lastModified = lastModified,
-                    flags = flags,
-                    summary = summary,
                     uri = uri,
                 )
             }
-        } ?: run {
-            onProgress("query → null cursor ($directory)")
-        }
+        } ?: throw IllegalStateException("query children 返回 null cursor: $directory")
         return children
     }
 
-    private fun readLongColumn(rows: Cursor, index: Int): Long? {
-        if (index < 0 || rows.isNull(index)) return null
-        return rows.getLong(index)
-    }
-
-    private fun readIntColumn(rows: Cursor, index: Int): Int? {
-        if (index < 0 || rows.isNull(index)) return null
-        return rows.getInt(index)
-    }
-
-    private fun readStringColumn(rows: Cursor, index: Int): String? {
-        if (index < 0 || rows.isNull(index)) return null
-        return rows.getString(index)
-    }
+    private fun elapsedMs(startedAtNano: Long): Long =
+        (System.nanoTime() - startedAtNano) / 1_000_000L
 }

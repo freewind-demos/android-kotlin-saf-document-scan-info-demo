@@ -78,7 +78,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             return@rememberLauncherForActivityResult
         }
         selectedTreeUri = uri
-        resultText = "已选目录：\n$uri\n\nlist 扫完整树（流式报名字 / 一次性报数量）；再 access 前 5 个并 append 详情。"
+        resultText = "已选目录：\n$uri\n\n点下方按钮：顶部先写该方法内存直取字段，再分段计时（list 只收 URI / query 一次 name+size），每类只显示前 5 条。"
     }
 
     fun runDocumentFileScan() {
@@ -159,7 +159,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             fontWeight = FontWeight.Bold,
         )
         Text(
-            text = "list 整树：流式只报名字，一次性只报数量。下方 append 摘要 + 前5 list 快照 + access 详情。",
+            text = "对比两种扫法耗时：DocumentFile 先 list URI 再取 name/size；query 一次拿全。信息区顶部写内存直取字段，各大步空行，每类只显示前 5 条。",
             style = MaterialTheme.typography.bodyMedium,
         )
         OutlinedButton(onClick = { openTreeLauncher.launch(null) }) {
