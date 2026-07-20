@@ -2,120 +2,74 @@ package com.freewind.safscaninfo
 
 import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
-/** 单个文件在 SAF 扫描过程中能读到的全部字段 */
-data class ScannedFileInfo(
-    val relativePath: String,
-    val rootUri: String,
-    val parentUri: String,
-    val cursorDocumentId: String,
-    val cursorDisplayName: String,
-    val cursorMimeType: String?,
-    val cursorSizeBytes: Long,
-    val cursorIsDirectory: Boolean,
-    val cursorLastModifiedMs: Long?,
-    val cursorFlags: Int?,
-    val cursorSummary: String?,
-    val cursorUri: String,
-    val contractDocumentId: String?,
-    val documentFileName: String?,
-    val documentFileType: String?,
-    val documentFileUri: String?,
-    val documentFileExists: Boolean?,
-    val documentFileIsDirectory: Boolean?,
-    val documentFileIsFile: Boolean?,
-    val documentFileCanRead: Boolean?,
-    val documentFileCanWrite: Boolean?,
-    val documentFileLength: Long?,
-    val documentFileLastModifiedMs: Long?,
-    val documentFileParentUri: String?,
-) {
-    /** 格式化成「一行一个字段，文件之间空一行」的纯文本 */
-    fun formatLines(): List<String> {
-        val lines = mutableListOf<String>()
-        lines += "文件名: ${cursorDisplayName.ifBlank { relativePath }}"
-        lines += "relativePath: $relativePath"
-        lines += "rootUri: $rootUri"
-        lines += "parentUri: $parentUri"
-        lines += "--- DocumentsContract Cursor（music-player 扫描用的 4 列 + 扩展列）---"
-        lines += "documentId: $cursorDocumentId"
-        lines += "displayName: $cursorDisplayName"
-        lines += "mimeType: ${cursorMimeType ?: "(null)"}"
-        lines += "sizeBytes: $cursorSizeBytes"
-        lines += "isDirectory: $cursorIsDirectory"
-        lines += "lastModified: ${formatTime(cursorLastModifiedMs)}"
-        lines += "flags: ${cursorFlags?.toString() ?: "(null)"} ${describeFlags(cursorFlags)}"
-        lines += "summary: ${cursorSummary ?: "(null)"}"
-        lines += "uri: $cursorUri"
-        lines += "DocumentsContract.getDocumentId(uri): ${contractDocumentId ?: "(null)"}"
-        lines += "--- DocumentFile（单文件 API 额外可读字段）---"
-        lines += "DocumentFile.name: ${documentFileName ?: "(null)"}"
-        lines += "DocumentFile.type: ${documentFileType ?: "(null)"}"
-        lines += "DocumentFile.uri: ${documentFileUri ?: "(null)"}"
-        lines += "DocumentFile.exists: ${documentFileExists?.toString() ?: "(null)"}"
-        lines += "DocumentFile.isDirectory: ${documentFileIsDirectory?.toString() ?: "(null)"}"
-        lines += "DocumentFile.isFile: ${documentFileIsFile?.toString() ?: "(null)"}"
-        lines += "DocumentFile.canRead: ${documentFileCanRead?.toString() ?: "(null)"}"
-        lines += "DocumentFile.canWrite: ${documentFileCanWrite?.toString() ?: "(null)"}"
-        lines += "DocumentFile.length: ${documentFileLength?.toString() ?: "(null)"}"
-        lines += "DocumentFile.lastModified: ${formatTime(documentFileLastModifiedMs)}"
-        lines += "DocumentFile.parentUri: ${documentFileParentUri ?: "(null)"}"
-        return lines
-    }
-
-    private fun formatTime(epochMs: Long?): String {
-        if (epochMs == null || epochMs <= 0L) return "(无)"
-        val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-        return "${formatter.format(Date(epochMs))} ($epochMs ms)"
-    }
-
-    private fun describeFlags(flags: Int?): String {
-        if (flags == null) return ""
-        val parts = mutableListOf<String>()
-        if (flags and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE != 0) {
-            parts += "DIR_SUPPORTS_CREATE"
-        }
-        if (flags and DocumentsContract.Document.FLAG_SUPPORTS_WRITE != 0) {
-            parts += "SUPPORTS_WRITE"
-        }
-        if (flags and DocumentsContract.Document.FLAG_SUPPORTS_DELETE != 0) {
-            parts += "SUPPORTS_DELETE"
-        }
-        if (flags and DocumentsContract.Document.FLAG_SUPPORTS_RENAME != 0) {
-            parts += "SUPPORTS_RENAME"
-        }
-        if (flags and DocumentsContract.Document.FLAG_SUPPORTS_COPY != 0) {
-            parts += "SUPPORTS_COPY"
-        }
-        if (flags and DocumentsContract.Document.FLAG_SUPPORTS_MOVE != 0) {
-            parts += "SUPPORTS_MOVE"
-        }
-        if (flags and DocumentsContract.Document.FLAG_SUPPORTS_THUMBNAIL != 0) {
-            parts += "SUPPORTS_THUMBNAIL"
-        }
-        return if (parts.isEmpty()) "" else "[${parts.joinToString(", ")}]"
-    }
+enum class ScanMethod {
+    DOCUMENT_FILE,
+    DOCUMENTS_CONTRACT_QUERY,
 }
 
-/** 与 freewind-music-player 相同的 SAF 目录扫描方式，并收集更多可读字段 */
+/** DocumentFile.listFiles() 递归扫描，只读 DocumentFile 自身 API 字段 */
+data class DocumentFileScanResult(
+    val sortKey: String,
+    val name: String?,
+    val type: String?,
+    val uri: String,
+    val exists: Boolean,
+    val isDirectory: Boolean,
+    val isFile: Boolean,
+    val canRead: Boolean,
+    val canWrite: Boolean,
+    val length: Long,
+    val lastModified: Long,
+    val parentFileUri: String?,
+) {
+    fun formatLines(): List<String> = listOf(
+        fieldLine("name", name),
+        fieldLine("type", type),
+        fieldLine("uri", uri),
+        fieldLine("exists", exists),
+        fieldLine("isDirectory", isDirectory),
+        fieldLine("isFile", isFile),
+        fieldLine("canRead", canRead),
+        fieldLine("canWrite", canWrite),
+        fieldLine("length", length),
+        fieldLine("lastModified", lastModified),
+        fieldLine("parentFile", parentFileUri),
+    )
+}
+
+/** ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree) 递归扫描 */
+data class DocumentsContractQueryScanResult(
+    val sortKey: String,
+    val documentId: String,
+    val displayName: String,
+    val mimeType: String?,
+    val size: Long,
+    val lastModified: Long?,
+    val flags: Int?,
+    val summary: String?,
+    val uri: String,
+) {
+    fun formatLines(): List<String> = listOf(
+        fieldLine(DocumentsContract.Document.COLUMN_DOCUMENT_ID, documentId),
+        fieldLine(DocumentsContract.Document.COLUMN_DISPLAY_NAME, displayName),
+        fieldLine(DocumentsContract.Document.COLUMN_MIME_TYPE, mimeType),
+        fieldLine(DocumentsContract.Document.COLUMN_SIZE, size),
+        fieldLine(DocumentsContract.Document.COLUMN_LAST_MODIFIED, lastModified),
+        fieldLine(DocumentsContract.Document.COLUMN_FLAGS, flags),
+        fieldLine(DocumentsContract.Document.COLUMN_SUMMARY, summary),
+        fieldLine("uri", uri),
+    )
+}
+
+/** SAF 目录扫描：DocumentFile 与 DocumentsContract 两种独立路径 */
 object SafDirectoryScanner {
 
-    /** Cursor 里 music-player 实际查询的 4 列 */
-    private val musicPlayerProjection = arrayOf(
-        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-        DocumentsContract.Document.COLUMN_MIME_TYPE,
-        DocumentsContract.Document.COLUMN_SIZE,
-    )
-
-    /** Demo 额外查询的列，展示 Cursor 还能拿到什么 */
-    private val extendedProjection = arrayOf(
+    private val documentProjection = arrayOf(
         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
         DocumentsContract.Document.COLUMN_DISPLAY_NAME,
         DocumentsContract.Document.COLUMN_MIME_TYPE,
@@ -125,70 +79,109 @@ object SafDirectoryScanner {
         DocumentsContract.Document.COLUMN_SUMMARY,
     )
 
-    /** 递归扫描目录下所有文件（跳过子目录本身，只列文件） */
-    fun scanAllFiles(
+    fun scanWithDocumentFile(
         context: Context,
         treeUri: Uri,
-    ): List<ScannedFileInfo> {
-        val rootUri = treeUri.toString()
-        val rootDocumentId = DocumentsContract.getDocumentId(treeUri)
-        val results = mutableListOf<ScannedFileInfo>()
-        walkTree(
-            context = context,
-            contentResolver = context.contentResolver,
-            treeUri = treeUri,
-            rootUri = rootUri,
-            parentDocumentId = rootDocumentId,
-            parentUri = treeUri.toString(),
-            relativePrefix = "",
-            onFileFound = { results += it },
-        )
-        return results.sortedBy { it.relativePath.lowercase() }
+    ): List<DocumentFileScanResult> {
+        val root = DocumentFile.fromTreeUri(context, treeUri)
+            ?: throw IllegalArgumentException("DocumentFile.fromTreeUri 无法打开目录")
+        val results = mutableListOf<DocumentFileScanResult>()
+        walkDocumentFileTree(root, sortPrefix = "", onFileFound = { results += it })
+        return results.sortedBy { it.sortKey.lowercase() }
     }
 
-    private fun walkTree(
+    fun scanWithDocumentsContractQuery(
         context: Context,
-        contentResolver: ContentResolver,
         treeUri: Uri,
-        rootUri: String,
-        parentDocumentId: String,
-        parentUri: String,
-        relativePrefix: String,
-        onFileFound: (ScannedFileInfo) -> Unit,
+    ): List<DocumentsContractQueryScanResult> {
+        val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+        val results = mutableListOf<DocumentsContractQueryScanResult>()
+        walkDocumentsContractQueryTree(
+            contentResolver = context.contentResolver,
+            treeUri = treeUri,
+            parentDocumentId = rootDocumentId,
+            sortPrefix = "",
+            onFileFound = { results += it },
+        )
+        return results.sortedBy { it.sortKey.lowercase() }
+    }
+
+    private fun walkDocumentFileTree(
+        dir: DocumentFile,
+        sortPrefix: String,
+        onFileFound: (DocumentFileScanResult) -> Unit,
     ) {
-        val children = listChildren(contentResolver, treeUri, parentDocumentId)
-        children.forEach { child ->
+        for (child in dir.listFiles()) {
+            val name = child.name ?: continue
+            val nextSortKey = if (sortPrefix.isEmpty()) name else "$sortPrefix/$name"
             if (child.isDirectory) {
-                val nextPrefix = if (relativePrefix.isEmpty()) {
-                    child.displayName
-                } else {
-                    "$relativePrefix/${child.displayName}"
-                }
-                walkTree(
-                    context = context,
-                    contentResolver = contentResolver,
-                    treeUri = treeUri,
-                    rootUri = rootUri,
-                    parentDocumentId = child.documentId,
-                    parentUri = child.uri.toString(),
-                    relativePrefix = nextPrefix,
-                    onFileFound = onFileFound,
-                )
-                return@forEach
+                walkDocumentFileTree(child, nextSortKey, onFileFound)
+                continue
             }
             onFileFound(
-                buildFileInfo(
-                    context = context,
-                    rootUri = rootUri,
-                    parentUri = parentUri,
-                    relativePrefix = relativePrefix,
-                    child = child,
+                DocumentFileScanResult(
+                    sortKey = nextSortKey,
+                    name = child.name,
+                    type = child.type,
+                    uri = child.uri.toString(),
+                    exists = child.exists(),
+                    isDirectory = child.isDirectory,
+                    isFile = child.isFile,
+                    canRead = child.canRead(),
+                    canWrite = child.canWrite(),
+                    length = child.length(),
+                    lastModified = child.lastModified(),
+                    parentFileUri = child.parentFile?.uri?.toString(),
                 ),
             )
         }
     }
 
-    /** 与 music-player DocumentsContractApi.listChildren 相同：Cursor 逐行读子项 */
+    private fun walkDocumentsContractQueryTree(
+        contentResolver: ContentResolver,
+        treeUri: Uri,
+        parentDocumentId: String,
+        sortPrefix: String,
+        onFileFound: (DocumentsContractQueryScanResult) -> Unit,
+    ) {
+        val children = listChildren(contentResolver, treeUri, parentDocumentId)
+        children.forEach { child ->
+            if (child.isDirectory) {
+                val nextSortKey = if (sortPrefix.isEmpty()) {
+                    child.displayName
+                } else {
+                    "$sortPrefix/${child.displayName}"
+                }
+                walkDocumentsContractQueryTree(
+                    contentResolver = contentResolver,
+                    treeUri = treeUri,
+                    parentDocumentId = child.documentId,
+                    sortPrefix = nextSortKey,
+                    onFileFound = onFileFound,
+                )
+                return@forEach
+            }
+            val sortKey = if (sortPrefix.isEmpty()) {
+                child.displayName
+            } else {
+                "$sortPrefix/${child.displayName}"
+            }
+            onFileFound(
+                DocumentsContractQueryScanResult(
+                    sortKey = sortKey,
+                    documentId = child.documentId,
+                    displayName = child.displayName,
+                    mimeType = child.mimeType,
+                    size = child.size,
+                    lastModified = child.lastModified,
+                    flags = child.flags,
+                    summary = child.summary,
+                    uri = child.uri.toString(),
+                ),
+            )
+        }
+    }
+
     private fun listChildren(
         contentResolver: ContentResolver,
         treeUri: Uri,
@@ -196,31 +189,31 @@ object SafDirectoryScanner {
     ): List<ListedChild> {
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocumentId)
         val children = mutableListOf<ListedChild>()
-        contentResolver.query(childrenUri, extendedProjection, null, null, null)?.use { cursor ->
-            val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-            val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-            val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
-            val sizeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
-            val modifiedIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-            val flagsIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_FLAGS)
-            val summaryIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SUMMARY)
-            while (cursor.moveToNext()) {
-                val documentId = cursor.getString(idIndex).orEmpty()
-                val displayName = cursor.getString(nameIndex).orEmpty()
-                val mimeType = cursor.getString(mimeIndex)
-                val sizeBytes = if (cursor.isNull(sizeIndex)) 0L else cursor.getLong(sizeIndex)
-                val lastModified = if (cursor.isNull(modifiedIndex)) null else cursor.getLong(modifiedIndex)
-                val flags = if (cursor.isNull(flagsIndex)) null else cursor.getInt(flagsIndex)
-                val summary = cursor.getString(summaryIndex)
+        contentResolver.query(childrenUri, documentProjection, null, null, null)?.use { rows ->
+            val idIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val sizeIndex = rows.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+            val modifiedIndex = rows.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            val flagsIndex = rows.getColumnIndex(DocumentsContract.Document.COLUMN_FLAGS)
+            val summaryIndex = rows.getColumnIndex(DocumentsContract.Document.COLUMN_SUMMARY)
+            while (rows.moveToNext()) {
+                val documentId = rows.getString(idIndex).orEmpty()
+                val displayName = rows.getString(nameIndex).orEmpty()
+                val mimeType = rows.getString(mimeIndex)
+                val size = if (rows.isNull(sizeIndex)) 0L else rows.getLong(sizeIndex)
+                val lastModified = readLongColumn(rows, modifiedIndex)
+                val flags = readIntColumn(rows, flagsIndex)
+                val summary = readStringColumn(rows, summaryIndex)
                 val isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
                 val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
                 children += ListedChild(
                     documentId = documentId,
                     displayName = displayName,
                     mimeType = mimeType,
-                    sizeBytes = sizeBytes,
+                    size = size,
                     isDirectory = isDirectory,
-                    lastModifiedMs = lastModified,
+                    lastModified = lastModified,
                     flags = flags,
                     summary = summary,
                     uri = uri,
@@ -230,89 +223,56 @@ object SafDirectoryScanner {
         return children
     }
 
-    private fun buildFileInfo(
-        context: Context,
-        rootUri: String,
-        parentUri: String,
-        relativePrefix: String,
-        child: ListedChild,
-    ): ScannedFileInfo {
-        val relativePath = if (relativePrefix.isEmpty()) {
-            child.displayName
-        } else {
-            "$relativePrefix/${child.displayName}"
-        }
-        val documentFile = DocumentFile.fromSingleUri(context, child.uri)
-        val contractDocumentId = runCatching {
-            DocumentsContract.getDocumentId(child.uri)
-        }.getOrNull()
-        return ScannedFileInfo(
-            relativePath = relativePath,
-            rootUri = rootUri,
-            parentUri = parentUri,
-            cursorDocumentId = child.documentId,
-            cursorDisplayName = child.displayName,
-            cursorMimeType = child.mimeType,
-            cursorSizeBytes = child.sizeBytes,
-            cursorIsDirectory = child.isDirectory,
-            cursorLastModifiedMs = child.lastModifiedMs,
-            cursorFlags = child.flags,
-            cursorSummary = child.summary,
-            cursorUri = child.uri.toString(),
-            contractDocumentId = contractDocumentId,
-            documentFileName = documentFile?.name,
-            documentFileType = documentFile?.type,
-            documentFileUri = documentFile?.uri?.toString(),
-            documentFileExists = documentFile?.exists(),
-            documentFileIsDirectory = documentFile?.isDirectory,
-            documentFileIsFile = documentFile?.isFile,
-            documentFileCanRead = documentFile?.canRead(),
-            documentFileCanWrite = documentFile?.canWrite(),
-            documentFileLength = documentFile?.length(),
-            documentFileLastModifiedMs = documentFile?.lastModified(),
-            documentFileParentUri = documentFile?.parentFile?.uri?.toString(),
-        )
+    private fun readLongColumn(rows: Cursor, index: Int): Long? {
+        if (index < 0 || rows.isNull(index)) return null
+        return rows.getLong(index)
     }
 
-    /** music-player 扫描阶段从 Cursor 读到的原始子项 */
+    private fun readIntColumn(rows: Cursor, index: Int): Int? {
+        if (index < 0 || rows.isNull(index)) return null
+        return rows.getInt(index)
+    }
+
+    private fun readStringColumn(rows: Cursor, index: Int): String? {
+        if (index < 0 || rows.isNull(index)) return null
+        return rows.getString(index)
+    }
+
     private data class ListedChild(
         val documentId: String,
         val displayName: String,
         val mimeType: String?,
-        val sizeBytes: Long,
+        val size: Long,
         val isDirectory: Boolean,
-        val lastModifiedMs: Long?,
+        val lastModified: Long?,
         val flags: Int?,
         val summary: String?,
         val uri: Uri,
     )
-
-    /** 供 README / UI 展示：music-player 实际用的 projection */
-    fun musicPlayerProjectionDescription(): String {
-        return musicPlayerProjection.joinToString(", ") { column ->
-            when (column) {
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID -> "documentId"
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME -> "displayName"
-                DocumentsContract.Document.COLUMN_MIME_TYPE -> "mimeType"
-                DocumentsContract.Document.COLUMN_SIZE -> "sizeBytes"
-                else -> column
-            }
-        }
-    }
 }
 
-/** 把扫描结果拼成最终展示文本 */
-fun formatScanResult(files: List<ScannedFileInfo>): String {
+fun formatDocumentFileScanResult(files: List<DocumentFileScanResult>): String {
     if (files.isEmpty()) {
         return "未找到任何文件。\n\n请确认目录非空，且已授予读取权限。"
     }
-    val chunks = files.map { file ->
-        file.formatLines().joinToString("\n")
-    }
     return buildString {
-        appendLine("共扫描到 ${files.size} 个文件")
-        appendLine("music-player 扫描 Cursor 列: ${SafDirectoryScanner.musicPlayerProjectionDescription()}")
+        appendLine("DocumentFile.listFiles()")
+        appendLine("count: ${files.size}")
         appendLine()
-        append(chunks.joinToString("\n\n"))
+        append(files.joinToString("\n\n") { it.formatLines().joinToString("\n") })
     }
 }
+
+fun formatDocumentsContractQueryScanResult(files: List<DocumentsContractQueryScanResult>): String {
+    if (files.isEmpty()) {
+        return "未找到任何文件。\n\n请确认目录非空，且已授予读取权限。"
+    }
+    return buildString {
+        appendLine("ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(...))")
+        appendLine("count: ${files.size}")
+        appendLine()
+        append(files.joinToString("\n\n") { it.formatLines().joinToString("\n") })
+    }
+}
+
+private fun fieldLine(field: String, value: Any?): String = "$field: $value"
