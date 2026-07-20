@@ -10,8 +10,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +61,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
     var selectedTreeUri by remember { mutableStateOf<Uri?>(null) }
     var resultText by remember { mutableStateOf("请先选择目录，再选一种扫描方式。") }
     var isScanning by remember { mutableStateOf(false) }
+    var progressText by remember { mutableStateOf("") }
 
     val openTreeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -80,18 +84,35 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
     fun startScan(method: ScanMethod) {
         val treeUri = selectedTreeUri ?: return
         isScanning = true
-        resultText = "扫描中…"
+        progressText = when (method) {
+            ScanMethod.DOCUMENT_FILE -> "准备 DocumentFile 扫描…"
+            ScanMethod.DOCUMENTS_CONTRACT_QUERY -> "准备 ContentResolver.query 扫描…"
+        }
         scope.launch {
+            val onProgress: (String) -> Unit = { message ->
+                scope.launch(Dispatchers.Main.immediate) {
+                    progressText = message
+                }
+            }
             resultText = try {
                 withContext(Dispatchers.IO) {
                     when (method) {
                         ScanMethod.DOCUMENT_FILE ->
-                            SafDirectoryScanner.inspectWithDocumentFile(activity, treeUri)
+                            DocumentFileDirectoryScanner.inspect(
+                                context = activity,
+                                treeUri = treeUri,
+                                onProgress = onProgress,
+                            )
                         ScanMethod.DOCUMENTS_CONTRACT_QUERY ->
-                            SafDirectoryScanner.inspectWithDocumentsContractQuery(activity, treeUri)
+                            DocumentsContractQueryDirectoryScanner.inspect(
+                                context = activity,
+                                treeUri = treeUri,
+                                onProgress = onProgress,
+                            )
                     }
                 }
             } catch (error: Exception) {
+                progressText = "扫描失败"
                 "扫描失败：${error.message ?: error.javaClass.simpleName}"
             }
             isScanning = false
@@ -130,8 +151,23 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
         ) {
             Text("ContentResolver.query()")
         }
-        if (isScanning) {
-            CircularProgressIndicator()
+        if (isScanning || progressText.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (isScanning) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                }
+                Text(
+                    text = progressText.ifEmpty { "…" },
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 18.sp,
+                )
+            }
         }
         Text(
             text = resultText,

@@ -105,5 +105,7 @@ DocumentFile.length: 5242880
 
 ### 4. 关键代码
 
-- `SafDirectoryScanner.kt` — 递归 `listChildren` + 收集字段
+- `DocumentFileDirectoryScanner.kt` — `DocumentFile.listFiles()` 扫描
+- `DocumentsContractQueryDirectoryScanner.kt` — `ContentResolver.query` 扫描
+- `ScanTypes.kt` / `ScanReportFormat.kt` — 共用类型与报告格式
 - `MainActivity.kt` — 选目录、触发扫描、展示文本
