@@ -74,7 +74,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             return@rememberLauncherForActivityResult
         }
         selectedTreeUri = uri
-        resultText = "已选目录：\n$uri\n\n可选两种 API 扫描对比字段差异。"
+        resultText = "已选目录：\n$uri\n\n可选两种 API：先看 list 返回，再看第一个文件逐 API access。"
     }
 
     fun startScan(method: ScanMethod) {
@@ -85,14 +85,10 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             resultText = try {
                 withContext(Dispatchers.IO) {
                     when (method) {
-                        ScanMethod.DOCUMENT_FILE -> {
-                            val files = SafDirectoryScanner.scanWithDocumentFile(activity, treeUri)
-                            formatDocumentFileScanResult(files)
-                        }
-                        ScanMethod.DOCUMENTS_CONTRACT_QUERY -> {
-                            val files = SafDirectoryScanner.scanWithDocumentsContractQuery(activity, treeUri)
-                            formatDocumentsContractQueryScanResult(files)
-                        }
+                        ScanMethod.DOCUMENT_FILE ->
+                            SafDirectoryScanner.inspectWithDocumentFile(activity, treeUri)
+                        ScanMethod.DOCUMENTS_CONTRACT_QUERY ->
+                            SafDirectoryScanner.inspectWithDocumentsContractQuery(activity, treeUri)
                     }
                 }
             } catch (error: Exception) {
@@ -114,7 +110,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             fontWeight = FontWeight.Bold,
         )
         Text(
-            text = "对比 DocumentFile.listFiles() 与 ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(...))。",
+            text = "展示 list 阶段返回值，以及第一个文件逐个 API access 的 key-value。",
             style = MaterialTheme.typography.bodyMedium,
         )
         OutlinedButton(onClick = { openTreeLauncher.launch(null) }) {

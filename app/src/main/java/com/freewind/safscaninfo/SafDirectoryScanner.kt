@@ -12,61 +12,6 @@ enum class ScanMethod {
     DOCUMENTS_CONTRACT_QUERY,
 }
 
-/** DocumentFile.listFiles() 递归扫描，只读 DocumentFile 自身 API 字段 */
-data class DocumentFileScanResult(
-    val sortKey: String,
-    val name: String?,
-    val type: String?,
-    val uri: String,
-    val exists: Boolean,
-    val isDirectory: Boolean,
-    val isFile: Boolean,
-    val canRead: Boolean,
-    val canWrite: Boolean,
-    val length: Long,
-    val lastModified: Long,
-    val parentFileUri: String?,
-) {
-    fun formatLines(): List<String> = listOf(
-        fieldLine("name", name),
-        fieldLine("type", type),
-        fieldLine("uri", uri),
-        fieldLine("exists", exists),
-        fieldLine("isDirectory", isDirectory),
-        fieldLine("isFile", isFile),
-        fieldLine("canRead", canRead),
-        fieldLine("canWrite", canWrite),
-        fieldLine("length", length),
-        fieldLine("lastModified", lastModified),
-        fieldLine("parentFile", parentFileUri),
-    )
-}
-
-/** ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree) 递归扫描 */
-data class DocumentsContractQueryScanResult(
-    val sortKey: String,
-    val documentId: String,
-    val displayName: String,
-    val mimeType: String?,
-    val size: Long,
-    val lastModified: Long?,
-    val flags: Int?,
-    val summary: String?,
-    val uri: String,
-) {
-    fun formatLines(): List<String> = listOf(
-        fieldLine(DocumentsContract.Document.COLUMN_DOCUMENT_ID, documentId),
-        fieldLine(DocumentsContract.Document.COLUMN_DISPLAY_NAME, displayName),
-        fieldLine(DocumentsContract.Document.COLUMN_MIME_TYPE, mimeType),
-        fieldLine(DocumentsContract.Document.COLUMN_SIZE, size),
-        fieldLine(DocumentsContract.Document.COLUMN_LAST_MODIFIED, lastModified),
-        fieldLine(DocumentsContract.Document.COLUMN_FLAGS, flags),
-        fieldLine(DocumentsContract.Document.COLUMN_SUMMARY, summary),
-        fieldLine("uri", uri),
-    )
-}
-
-/** SAF 目录扫描：DocumentFile 与 DocumentsContract 两种独立路径 */
 object SafDirectoryScanner {
 
     private val documentProjection = arrayOf(
@@ -79,107 +24,216 @@ object SafDirectoryScanner {
         DocumentsContract.Document.COLUMN_SUMMARY,
     )
 
-    fun scanWithDocumentFile(
+    fun inspectWithDocumentFile(
         context: Context,
         treeUri: Uri,
-    ): List<DocumentFileScanResult> {
+    ): String {
         val root = DocumentFile.fromTreeUri(context, treeUri)
-            ?: throw IllegalArgumentException("DocumentFile.fromTreeUri 无法打开目录")
-        val results = mutableListOf<DocumentFileScanResult>()
-        walkDocumentFileTree(root, sortPrefix = "", onFileFound = { results += it })
-        return results.sortedBy { it.sortKey.lowercase() }
+            ?: throw IllegalArgumentException("DocumentFile.fromTreeUri() 无法打开目录")
+        val listSections = mutableListOf<String>()
+        val firstFile = findFirstFileWithDocumentFile(root, directoryPath = "", listSections = listSections)
+            ?: throw IllegalArgumentException("目录下未找到任何文件")
+        val accessFields = readDocumentFileAccessFields(context, firstFile.file)
+        return formatInspectReport(
+            title = "DocumentFile.listFiles() + first-file access",
+            firstFilePath = firstFile.path,
+            firstFileUri = firstFile.file.uri.toString(),
+            listSections = listSections,
+            accessFields = accessFields,
+        )
     }
 
-    fun scanWithDocumentsContractQuery(
+    fun inspectWithDocumentsContractQuery(
         context: Context,
         treeUri: Uri,
-    ): List<DocumentsContractQueryScanResult> {
+    ): String {
+        val listSections = mutableListOf<String>()
         val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
-        val results = mutableListOf<DocumentsContractQueryScanResult>()
-        walkDocumentsContractQueryTree(
+        val firstFile = findFirstFileWithDocumentsContractQuery(
             contentResolver = context.contentResolver,
             treeUri = treeUri,
             parentDocumentId = rootDocumentId,
-            sortPrefix = "",
-            onFileFound = { results += it },
+            directoryPath = "",
+            listSections = listSections,
+        ) ?: throw IllegalArgumentException("目录下未找到任何文件")
+        val accessFields = readDocumentsContractAccessFields(context.contentResolver, firstFile.child.uri)
+        return formatInspectReport(
+            title = "ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(...)) + first-file access",
+            firstFilePath = firstFile.path,
+            firstFileUri = firstFile.child.uri.toString(),
+            listSections = listSections,
+            accessFields = accessFields,
         )
-        return results.sortedBy { it.sortKey.lowercase() }
     }
 
-    private fun walkDocumentFileTree(
+    private data class FirstDocumentFile(
+        val path: String,
+        val file: DocumentFile,
+    )
+
+    private data class FirstListedFile(
+        val path: String,
+        val child: ListedChild,
+    )
+
+    private fun findFirstFileWithDocumentFile(
         dir: DocumentFile,
-        sortPrefix: String,
-        onFileFound: (DocumentFileScanResult) -> Unit,
-    ) {
-        for (child in dir.listFiles()) {
+        directoryPath: String,
+        listSections: MutableList<String>,
+    ): FirstDocumentFile? {
+        val children = dir.listFiles()
+        listSections += formatListSection(
+            listApi = "DocumentFile.listFiles()",
+            listApiResult = children.size,
+            directory = directoryPath.ifEmpty { "/" },
+            items = children.map { readDocumentFileListItem(it) },
+        )
+        val sortedChildren = children.sortedBy { it.name?.lowercase().orEmpty() }
+        for (child in sortedChildren) {
             val name = child.name ?: continue
-            val nextSortKey = if (sortPrefix.isEmpty()) name else "$sortPrefix/$name"
+            val childPath = if (directoryPath.isEmpty()) name else "$directoryPath/$name"
             if (child.isDirectory) {
-                walkDocumentFileTree(child, nextSortKey, onFileFound)
+                findFirstFileWithDocumentFile(child, childPath, listSections)?.let { return it }
                 continue
             }
-            onFileFound(
-                DocumentFileScanResult(
-                    sortKey = nextSortKey,
-                    name = child.name,
-                    type = child.type,
-                    uri = child.uri.toString(),
-                    exists = child.exists(),
-                    isDirectory = child.isDirectory,
-                    isFile = child.isFile,
-                    canRead = child.canRead(),
-                    canWrite = child.canWrite(),
-                    length = child.length(),
-                    lastModified = child.lastModified(),
-                    parentFileUri = child.parentFile?.uri?.toString(),
-                ),
-            )
+            return FirstDocumentFile(path = childPath, file = child)
         }
+        return null
     }
 
-    private fun walkDocumentsContractQueryTree(
+    private fun findFirstFileWithDocumentsContractQuery(
         contentResolver: ContentResolver,
         treeUri: Uri,
         parentDocumentId: String,
-        sortPrefix: String,
-        onFileFound: (DocumentsContractQueryScanResult) -> Unit,
-    ) {
+        directoryPath: String,
+        listSections: MutableList<String>,
+    ): FirstListedFile? {
         val children = listChildren(contentResolver, treeUri, parentDocumentId)
-        children.forEach { child ->
+        listSections += formatListSection(
+            listApi = "ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(...), DocumentsContract.Document.COLUMN_*, null, null, null)",
+            listApiResult = children.size,
+            directory = directoryPath.ifEmpty { "/" },
+            items = children.map { readListedChildListItem(it) },
+        )
+        val sortedChildren = children.sortedBy { it.displayName.lowercase() }
+        for (child in sortedChildren) {
+            val childPath = if (directoryPath.isEmpty()) {
+                child.displayName
+            } else {
+                "$directoryPath/${child.displayName}"
+            }
             if (child.isDirectory) {
-                val nextSortKey = if (sortPrefix.isEmpty()) {
-                    child.displayName
-                } else {
-                    "$sortPrefix/${child.displayName}"
-                }
-                walkDocumentsContractQueryTree(
+                findFirstFileWithDocumentsContractQuery(
                     contentResolver = contentResolver,
                     treeUri = treeUri,
                     parentDocumentId = child.documentId,
-                    sortPrefix = nextSortKey,
-                    onFileFound = onFileFound,
-                )
-                return@forEach
+                    directoryPath = childPath,
+                    listSections = listSections,
+                )?.let { return it }
+                continue
             }
-            val sortKey = if (sortPrefix.isEmpty()) {
-                child.displayName
-            } else {
-                "$sortPrefix/${child.displayName}"
-            }
-            onFileFound(
-                DocumentsContractQueryScanResult(
-                    sortKey = sortKey,
-                    documentId = child.documentId,
-                    displayName = child.displayName,
-                    mimeType = child.mimeType,
-                    size = child.size,
-                    lastModified = child.lastModified,
-                    flags = child.flags,
-                    summary = child.summary,
-                    uri = child.uri.toString(),
-                ),
-            )
+            return FirstListedFile(path = childPath, child = child)
         }
+        return null
+    }
+
+    /** listFiles() 返回元素：属性原名；方法用 method() 作 key */
+    private fun readDocumentFileListItem(file: DocumentFile): List<Pair<String, Any?>> = listOf(
+        "name" to file.name,
+        "type" to file.type,
+        "uri" to file.uri.toString(),
+        "isDirectory" to file.isDirectory,
+        "isFile" to file.isFile,
+        "exists()" to file.exists(),
+        "canRead()" to file.canRead(),
+        "canWrite()" to file.canWrite(),
+        "length()" to file.length(),
+        "lastModified()" to file.lastModified(),
+        "parentFile" to file.parentFile?.uri?.toString(),
+    )
+
+    /** 第一个文件：方法名() 或 API 全名作 key，返回值作 value */
+    private fun readDocumentFileAccessFields(
+        context: Context,
+        listedFile: DocumentFile,
+    ): List<Pair<String, Any?>> {
+        val uri = listedFile.uri
+        val file = DocumentFile.fromSingleUri(context, uri)
+            ?: throw IllegalArgumentException("DocumentFile.fromSingleUri() 无法打开文件")
+        return listOf(
+            "DocumentFile.fromSingleUri(context, uri)" to file.javaClass.simpleName,
+            "name" to file.name,
+            "type" to file.type,
+            "uri" to file.uri.toString(),
+            "isDirectory" to file.isDirectory,
+            "isFile" to file.isFile,
+            "exists()" to file.exists(),
+            "canRead()" to file.canRead(),
+            "canWrite()" to file.canWrite(),
+            "length()" to file.length(),
+            "lastModified()" to file.lastModified(),
+            "parentFile" to file.parentFile?.uri?.toString(),
+        )
+    }
+
+    private fun readListedChildListItem(child: ListedChild): List<Pair<String, Any?>> {
+        val fields = mutableListOf<Pair<String, Any?>>(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID to child.documentId,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME to child.displayName,
+            DocumentsContract.Document.COLUMN_MIME_TYPE to child.mimeType,
+            DocumentsContract.Document.COLUMN_SIZE to child.size,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED to child.lastModified,
+            DocumentsContract.Document.COLUMN_FLAGS to child.flags,
+            DocumentsContract.Document.COLUMN_SUMMARY to child.summary,
+        )
+        fields += "DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)" to child.uri.toString()
+        return fields
+    }
+
+    private fun readDocumentsContractAccessFields(
+        contentResolver: ContentResolver,
+        fileUri: Uri,
+    ): List<Pair<String, Any?>> {
+        val fields = mutableListOf<Pair<String, Any?>>()
+        fields += "DocumentsContract.getDocumentId(uri)" to DocumentsContract.getDocumentId(fileUri)
+        fields += queryDocumentAccessFields(contentResolver, fileUri)
+        return fields
+    }
+
+    private fun queryDocumentAccessFields(
+        contentResolver: ContentResolver,
+        documentUri: Uri,
+    ): List<Pair<String, Any?>> {
+        val queryApi =
+            "ContentResolver.query(uri, DocumentsContract.Document.COLUMN_*, null, null, null)"
+        val fields = mutableListOf<Pair<String, Any?>>()
+        contentResolver.query(documentUri, documentProjection, null, null, null)?.use { rows ->
+            fields += "$queryApi.getCount()" to rows.count
+            if (!rows.moveToFirst()) {
+                return fields
+            }
+            documentProjection.forEach { column ->
+                val index = rows.getColumnIndex(column)
+                if (index < 0) {
+                    fields += column to null
+                    return@forEach
+                }
+                if (rows.isNull(index)) {
+                    fields += column to null
+                    return@forEach
+                }
+                fields += when (column) {
+                    DocumentsContract.Document.COLUMN_SIZE,
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                    -> column to rows.getLong(index)
+                    DocumentsContract.Document.COLUMN_FLAGS -> column to rows.getInt(index)
+                    else -> column to rows.getString(index)
+                }
+            }
+        } ?: run {
+            fields += "$queryApi.getCount()" to null
+        }
+        return fields
     }
 
     private fun listChildren(
@@ -251,28 +305,44 @@ object SafDirectoryScanner {
     )
 }
 
-fun formatDocumentFileScanResult(files: List<DocumentFileScanResult>): String {
-    if (files.isEmpty()) {
-        return "未找到任何文件。\n\n请确认目录非空，且已授予读取权限。"
-    }
-    return buildString {
-        appendLine("DocumentFile.listFiles()")
-        appendLine("count: ${files.size}")
+private fun formatInspectReport(
+    title: String,
+    firstFilePath: String,
+    firstFileUri: String,
+    listSections: List<String>,
+    accessFields: List<Pair<String, Any?>>,
+): String = buildString {
+    appendLine(title)
+    appendLine()
+    appendLine("firstFilePath: $firstFilePath")
+    appendLine("firstFileUri: $firstFileUri")
+    appendLine()
+    appendLine("=== list ===")
+    listSections.forEach { section ->
         appendLine()
-        append(files.joinToString("\n\n") { it.formatLines().joinToString("\n") })
+        append(section)
+    }
+    appendLine()
+    appendLine("=== access (first file only) ===")
+    appendLine()
+    accessFields.forEach { (key, value) ->
+        appendLine("$key: $value")
     }
 }
 
-fun formatDocumentsContractQueryScanResult(files: List<DocumentsContractQueryScanResult>): String {
-    if (files.isEmpty()) {
-        return "未找到任何文件。\n\n请确认目录非空，且已授予读取权限。"
-    }
-    return buildString {
-        appendLine("ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(...))")
-        appendLine("count: ${files.size}")
+private fun formatListSection(
+    listApi: String,
+    listApiResult: Int,
+    directory: String,
+    items: List<List<Pair<String, Any?>>>,
+): String = buildString {
+    appendLine("$listApi: $listApiResult")
+    appendLine("directory: $directory")
+    items.forEachIndexed { index, item ->
         appendLine()
-        append(files.joinToString("\n\n") { it.formatLines().joinToString("\n") })
+        appendLine("[item $index]")
+        item.forEach { (key, value) ->
+            appendLine("$key: $value")
+        }
     }
 }
-
-private fun fieldLine(field: String, value: Any?): String = "$field: $value"
