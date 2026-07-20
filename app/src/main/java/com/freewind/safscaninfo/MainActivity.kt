@@ -78,30 +78,37 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             return@rememberLauncherForActivityResult
         }
         selectedTreeUri = uri
-        resultText = "已选目录：\n$uri\n\n可选两种 API：list 扫完整棵树，再对前 5 个文件单独 access。"
+        resultText = "已选目录：\n$uri\n\nlist 扫完整树（流式报名字 / 一次性报数量）；再 access 前 5 个并 append 详情。"
     }
 
     fun runDocumentFileScan() {
         val treeUri = selectedTreeUri ?: return
         isScanning = true
         progressText = "准备 DocumentFile 扫描…"
+        resultText = ""
         scope.launch {
             val onProgress: (String) -> Unit = { message ->
                 scope.launch(Dispatchers.Main.immediate) {
                     progressText = message
                 }
             }
-            resultText = try {
+            val onAppend: (String) -> Unit = { chunk ->
+                scope.launch(Dispatchers.Main.immediate) {
+                    resultText = if (resultText.isEmpty()) chunk else "$resultText\n$chunk"
+                }
+            }
+            try {
                 withContext(Dispatchers.IO) {
                     DocumentFileDirectoryScanner.inspect(
                         context = activity,
                         treeUri = treeUri,
                         onProgress = onProgress,
+                        onAppend = onAppend,
                     )
                 }
             } catch (error: Exception) {
                 progressText = "扫描失败"
-                "扫描失败：${error.message ?: error.javaClass.simpleName}"
+                resultText = "扫描失败：${error.message ?: error.javaClass.simpleName}"
             }
             isScanning = false
         }
@@ -111,23 +118,30 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
         val treeUri = selectedTreeUri ?: return
         isScanning = true
         progressText = "准备 ContentResolver.query 扫描…"
+        resultText = ""
         scope.launch {
             val onProgress: (String) -> Unit = { message ->
                 scope.launch(Dispatchers.Main.immediate) {
                     progressText = message
                 }
             }
-            resultText = try {
+            val onAppend: (String) -> Unit = { chunk ->
+                scope.launch(Dispatchers.Main.immediate) {
+                    resultText = if (resultText.isEmpty()) chunk else "$resultText\n$chunk"
+                }
+            }
+            try {
                 withContext(Dispatchers.IO) {
                     DocumentsContractQueryDirectoryScanner.inspect(
                         context = activity,
                         treeUri = treeUri,
                         onProgress = onProgress,
+                        onAppend = onAppend,
                     )
                 }
             } catch (error: Exception) {
                 progressText = "扫描失败"
-                "扫描失败：${error.message ?: error.javaClass.simpleName}"
+                resultText = "扫描失败：${error.message ?: error.javaClass.simpleName}"
             }
             isScanning = false
         }
@@ -145,7 +159,7 @@ private fun SafScanInfoScreen(activity: ComponentActivity) {
             fontWeight = FontWeight.Bold,
         )
         Text(
-            text = "list 扫完整棵树；再对前 5 个文件逐个 API access 的 key-value。",
+            text = "list 整树：流式只报名字，一次性只报数量。下方 append 摘要 + 前5 list 快照 + access 详情。",
             style = MaterialTheme.typography.bodyMedium,
         )
         OutlinedButton(onClick = { openTreeLauncher.launch(null) }) {
