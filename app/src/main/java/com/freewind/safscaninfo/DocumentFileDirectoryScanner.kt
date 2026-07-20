@@ -6,6 +6,8 @@ import androidx.documentfile.provider.DocumentFile
 
 object DocumentFileDirectoryScanner {
 
+    private const val ACCESS_FILE_LIMIT = 5
+
     fun inspect(
         context: Context,
         treeUri: Uri,
@@ -15,35 +17,54 @@ object DocumentFileDirectoryScanner {
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?: throw IllegalArgumentException("DocumentFile.fromTreeUri() 无法打开目录")
         val listSections = mutableListOf<String>()
-        val firstFile = findFirstFile(
+        val files = mutableListOf<FoundFile>()
+        collectFiles(
             dir = root,
             directoryPath = "",
             listSections = listSections,
+            found = files,
+            limit = ACCESS_FILE_LIMIT,
             onProgress = onProgress,
-        ) ?: throw IllegalArgumentException("目录下未找到任何文件")
-        onProgress("读取第一个文件 access：${firstFile.path}")
-        val accessFields = readAccessFields(context, firstFile.file)
+        )
+        if (files.isEmpty()) {
+            throw IllegalArgumentException("目录下未找到任何文件")
+        }
+        val accessSections = files.mapIndexed { index, foundFile ->
+            onProgress("读取文件 access (${index + 1}/${files.size})：${foundFile.path}")
+            AccessSection(
+                path = foundFile.path,
+                uri = foundFile.file.uri.toString(),
+                fields = readAccessFields(context, foundFile.file),
+            )
+        }
         onProgress("扫描完成")
         return formatInspectReport(
-            title = "DocumentFile.listFiles() + first-file access",
-            firstFilePath = firstFile.path,
-            firstFileUri = firstFile.file.uri.toString(),
+            title = "DocumentFile.listFiles() + first-$ACCESS_FILE_LIMIT-files access",
             listSections = listSections,
-            accessFields = accessFields,
+            accessSections = accessSections,
         )
     }
 
-    private data class FirstFile(
+    private data class FoundFile(
         val path: String,
         val file: DocumentFile,
     )
 
-    private fun findFirstFile(
+    private data class AccessSection(
+        val path: String,
+        val uri: String,
+        val fields: List<Pair<String, Any?>>,
+    )
+
+    private fun collectFiles(
         dir: DocumentFile,
         directoryPath: String,
         listSections: MutableList<String>,
+        found: MutableList<FoundFile>,
+        limit: Int,
         onProgress: (String) -> Unit,
-    ): FirstFile? {
+    ) {
+        if (found.size >= limit) return
         val directory = directoryPath.ifEmpty { "/" }
         onProgress("DocumentFile.listFiles() → $directory …")
         val children = dir.listFiles()
@@ -56,22 +77,24 @@ object DocumentFileDirectoryScanner {
         )
         val sortedChildren = children.sortedBy { it.name?.lowercase().orEmpty() }
         for (child in sortedChildren) {
+            if (found.size >= limit) return
             val name = child.name ?: continue
             val childPath = if (directoryPath.isEmpty()) name else "$directoryPath/$name"
             if (child.isDirectory) {
                 onProgress("进入子目录 $childPath")
-                findFirstFile(
+                collectFiles(
                     dir = child,
                     directoryPath = childPath,
                     listSections = listSections,
+                    found = found,
+                    limit = limit,
                     onProgress = onProgress,
-                )?.let { return it }
+                )
                 continue
             }
-            onProgress("找到第一个文件：$childPath")
-            return FirstFile(path = childPath, file = child)
+            onProgress("找到文件 (${found.size + 1}/$limit)：$childPath")
+            found += FoundFile(path = childPath, file = child)
         }
-        return null
     }
 
     /** listFiles() 返回元素：属性原名；方法用 method() 作 key */
@@ -89,7 +112,7 @@ object DocumentFileDirectoryScanner {
         "parentFile" to file.parentFile?.uri?.toString(),
     )
 
-    /** 第一个文件：方法名() 或 API 全名作 key，返回值作 value */
+    /** access 文件：方法名() 或 API 全名作 key，返回值作 value */
     private fun readAccessFields(
         context: Context,
         listedFile: DocumentFile,
@@ -115,15 +138,12 @@ object DocumentFileDirectoryScanner {
 
     private fun formatInspectReport(
         title: String,
-        firstFilePath: String,
-        firstFileUri: String,
         listSections: List<String>,
-        accessFields: List<Pair<String, Any?>>,
+        accessSections: List<AccessSection>,
     ): String = buildString {
         appendLine(title)
         appendLine()
-        appendLine("firstFilePath: $firstFilePath")
-        appendLine("firstFileUri: $firstFileUri")
+        appendLine("accessFileCount: ${accessSections.size}")
         appendLine()
         appendLine("=== list ===")
         listSections.forEach { section ->
@@ -131,10 +151,15 @@ object DocumentFileDirectoryScanner {
             append(section)
         }
         appendLine()
-        appendLine("=== access (first file only) ===")
-        appendLine()
-        accessFields.forEach { (key, value) ->
-            appendLine("$key: $value")
+        appendLine("=== access (first ${accessSections.size} files) ===")
+        accessSections.forEachIndexed { index, section ->
+            appendLine()
+            appendLine("--- file ${index + 1} ---")
+            appendLine("path: ${section.path}")
+            appendLine("uri: ${section.uri}")
+            section.fields.forEach { (key, value) ->
+                appendLine("$key: $value")
+            }
         }
     }
 

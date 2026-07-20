@@ -8,6 +8,8 @@ import android.provider.DocumentsContract
 
 object DocumentsContractQueryDirectoryScanner {
 
+    private const val ACCESS_FILE_LIMIT = 5
+
     private val documentProjection = arrayOf(
         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
         DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -25,30 +27,45 @@ object DocumentsContractQueryDirectoryScanner {
     ): String {
         onProgress("DocumentsContract.getTreeDocumentId() …")
         val listSections = mutableListOf<String>()
-        val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
-        val firstFile = findFirstFile(
+        val files = mutableListOf<FoundFile>()
+        collectFiles(
             contentResolver = context.contentResolver,
             treeUri = treeUri,
-            parentDocumentId = rootDocumentId,
+            parentDocumentId = DocumentsContract.getTreeDocumentId(treeUri),
             directoryPath = "",
             listSections = listSections,
+            found = files,
+            limit = ACCESS_FILE_LIMIT,
             onProgress = onProgress,
-        ) ?: throw IllegalArgumentException("目录下未找到任何文件")
-        onProgress("读取第一个文件 access：${firstFile.path}")
-        val accessFields = readAccessFields(context.contentResolver, firstFile.child.uri)
+        )
+        if (files.isEmpty()) {
+            throw IllegalArgumentException("目录下未找到任何文件")
+        }
+        val accessSections = files.mapIndexed { index, foundFile ->
+            onProgress("读取文件 access (${index + 1}/${files.size})：${foundFile.path}")
+            AccessSection(
+                path = foundFile.path,
+                uri = foundFile.child.uri.toString(),
+                fields = readAccessFields(context.contentResolver, foundFile.child.uri),
+            )
+        }
         onProgress("扫描完成")
         return formatInspectReport(
-            title = "ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(...)) + first-file access",
-            firstFilePath = firstFile.path,
-            firstFileUri = firstFile.child.uri.toString(),
+            title = "ContentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(...)) + first-$ACCESS_FILE_LIMIT-files access",
             listSections = listSections,
-            accessFields = accessFields,
+            accessSections = accessSections,
         )
     }
 
-    private data class FirstFile(
+    private data class FoundFile(
         val path: String,
         val child: ListedChild,
+    )
+
+    private data class AccessSection(
+        val path: String,
+        val uri: String,
+        val fields: List<Pair<String, Any?>>,
     )
 
     private data class ListedChild(
@@ -63,14 +80,17 @@ object DocumentsContractQueryDirectoryScanner {
         val uri: Uri,
     )
 
-    private fun findFirstFile(
+    private fun collectFiles(
         contentResolver: ContentResolver,
         treeUri: Uri,
         parentDocumentId: String,
         directoryPath: String,
         listSections: MutableList<String>,
+        found: MutableList<FoundFile>,
+        limit: Int,
         onProgress: (String) -> Unit,
-    ): FirstFile? {
+    ) {
+        if (found.size >= limit) return
         val directory = directoryPath.ifEmpty { "/" }
         onProgress("ContentResolver.query(buildChildDocumentsUriUsingTree) → $directory …")
         val children = listChildren(contentResolver, treeUri, parentDocumentId)
@@ -83,6 +103,7 @@ object DocumentsContractQueryDirectoryScanner {
         )
         val sortedChildren = children.sortedBy { it.displayName.lowercase() }
         for (child in sortedChildren) {
+            if (found.size >= limit) return
             val childPath = if (directoryPath.isEmpty()) {
                 child.displayName
             } else {
@@ -90,20 +111,21 @@ object DocumentsContractQueryDirectoryScanner {
             }
             if (child.isDirectory) {
                 onProgress("进入子目录 $childPath")
-                findFirstFile(
+                collectFiles(
                     contentResolver = contentResolver,
                     treeUri = treeUri,
                     parentDocumentId = child.documentId,
                     directoryPath = childPath,
                     listSections = listSections,
+                    found = found,
+                    limit = limit,
                     onProgress = onProgress,
-                )?.let { return it }
+                )
                 continue
             }
-            onProgress("找到第一个文件：$childPath")
-            return FirstFile(path = childPath, child = child)
+            onProgress("找到文件 (${found.size + 1}/$limit)：$childPath")
+            found += FoundFile(path = childPath, child = child)
         }
-        return null
     }
 
     private fun readListItem(child: ListedChild): List<Pair<String, Any?>> {
@@ -224,15 +246,12 @@ object DocumentsContractQueryDirectoryScanner {
 
     private fun formatInspectReport(
         title: String,
-        firstFilePath: String,
-        firstFileUri: String,
         listSections: List<String>,
-        accessFields: List<Pair<String, Any?>>,
+        accessSections: List<AccessSection>,
     ): String = buildString {
         appendLine(title)
         appendLine()
-        appendLine("firstFilePath: $firstFilePath")
-        appendLine("firstFileUri: $firstFileUri")
+        appendLine("accessFileCount: ${accessSections.size}")
         appendLine()
         appendLine("=== list ===")
         listSections.forEach { section ->
@@ -240,10 +259,15 @@ object DocumentsContractQueryDirectoryScanner {
             append(section)
         }
         appendLine()
-        appendLine("=== access (first file only) ===")
-        appendLine()
-        accessFields.forEach { (key, value) ->
-            appendLine("$key: $value")
+        appendLine("=== access (first ${accessSections.size} files) ===")
+        accessSections.forEachIndexed { index, section ->
+            appendLine()
+            appendLine("--- file ${index + 1} ---")
+            appendLine("path: ${section.path}")
+            appendLine("uri: ${section.uri}")
+            section.fields.forEach { (key, value) ->
+                appendLine("$key: $value")
+            }
         }
     }
 
